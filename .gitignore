@@ -1,0 +1,12 @@
+# Real credentials. config/config.example.json is the tracked template.
+config/config.json
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local scan output
+*.log
+captures/
