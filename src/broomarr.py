@@ -47,6 +47,19 @@ def load_config(path=CONFIG):
     return cfg
 
 
+def _to_int(value):
+    """Coerce a season/episode identifier to int, or None if it cannot be.
+
+    Tautulli returns these as strings in some API versions and Sonarr
+    already returns ints, but both sides are coerced here so the join in
+    Library.verdict() compares like with like.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def http_get(url, headers=None):
     req = urllib.request.Request(url, headers=headers or {})
     with urllib.request.urlopen(req, timeout=120) as response:
@@ -102,24 +115,32 @@ class Library:
             # Tautulli records a partial view as history; require a real watch.
             if (row.get("watched_status") or 0) < 0.5:
                 continue
+            # A row whose season/episode cannot be identified must not
+            # silently count as a watched episode - unknown blocks.
+            season = _to_int(row.get("parent_media_index"))
+            ep = _to_int(row.get("media_index"))
+            if season is None or ep is None:
+                continue
             user = index.setdefault(show.lower(), {}).setdefault(
                 row["friendly_name"], {"eps": set(), "last": 0})
-            user["eps"].add((row.get("parent_media_index"),
-                             row.get("media_index")))
+            user["eps"].add((season, ep))
             user["last"] = max(user["last"], row.get("stopped") or 0)
         return index
 
     def episode_facts(self, series_id):
         """Sonarr's real episode list, ignoring specials (season 0).
 
-        Returns (missing, upcoming): aired but not downloaded, and not yet
-        aired. Counting from the episode list rather than from the series
-        statistics avoids two separate traps - see docs/DESIGN.md.
+        Returns (missing, upcoming, on_disk_eps): aired but not downloaded,
+        not yet aired, and the (season, episode) identifiers of every
+        aired episode that has a file. Counting from the episode list
+        rather than from the series statistics avoids two separate traps -
+        see docs/DESIGN.md.
         """
         now = self.now()
-        missing, upcoming = [], []
+        missing, upcoming, on_disk_eps = [], [], set()
         for episode in self.sonarr("/api/v3/episode?seriesId=%s" % series_id):
-            if episode.get("seasonNumber", 0) == 0:
+            season = episode.get("seasonNumber", 0)
+            if season == 0:
                 continue
             aired = False
             air_date = episode.get("airDateUtc")
@@ -129,8 +150,7 @@ class Library:
                         air_date.replace("Z", "+00:00")) <= now
                 except ValueError:
                     aired = False
-            label = "S%02dE%02d" % (episode.get("seasonNumber", 0),
-                                    episode.get("episodeNumber", 0))
+            label = "S%02dE%02d" % (season, episode.get("episodeNumber", 0))
             if not aired:
                 upcoming.append(label)
             elif not episode.get("hasFile"):
@@ -140,7 +160,12 @@ class Library:
                 # episodeCount excludes it, which is exactly how a series
                 # missing an entire season reads as complete.
                 missing.append(label)
-        return missing, upcoming
+            else:
+                # Sonarr already returns ints here; coerce anyway so both
+                # sides of the join in verdict() are guaranteed comparable.
+                on_disk_eps.add((_to_int(season),
+                                _to_int(episode.get("episodeNumber"))))
+        return missing, upcoming, on_disk_eps
 
     def verdict(self, series, users, deep=True):
         """Is this show safe to delete? Returns (safe, [reasons it is not]).
@@ -148,7 +173,6 @@ class Library:
         Unknown blocks. Every path that cannot establish a fact returns a
         reason rather than passing.
         """
-        stats = series["statistics"]
         reasons = []
 
         if not users:
@@ -160,12 +184,6 @@ class Library:
         if watcher is None:
             return False, ["%s has no watch history for this show"
                            % self.watcher]
-
-        seen = len(users[watcher]["eps"])
-        on_disk = stats["episodeFileCount"]
-        if seen < on_disk:
-            reasons.append("%s watched %d of the %d episodes on disk"
-                           % (self.watcher, seen, on_disk))
 
         last = users[watcher]["last"]
         if not last:
@@ -183,7 +201,7 @@ class Library:
 
         if deep:
             try:
-                missing, upcoming = self.episode_facts(series["id"])
+                missing, upcoming, on_disk_eps = self.episode_facts(series["id"])
             except Exception as exc:
                 return False, reasons + [
                     "could not read episode list from Sonarr: %s" % exc]
@@ -193,9 +211,23 @@ class Library:
                                   + (" ..." if len(missing) > 6 else "")))
             if upcoming:
                 reasons.append("%d episode(s) not yet aired" % len(upcoming))
-        elif stats["episodeFileCount"] < stats["episodeCount"]:
-            reasons.append("%d aired episode(s) missing from disk"
-                           % (stats["episodeCount"] - stats["episodeFileCount"]))
+            unwatched = sorted(on_disk_eps - users[watcher]["eps"])
+            if unwatched:
+                labels = ["S%02dE%02d" % (s, e) for s, e in unwatched]
+                reasons.append(
+                    "%s never watched %d episode(s) on disk: %s"
+                    % (self.watcher, len(unwatched), ", ".join(labels[:6])
+                       + (" ..." if len(labels) > 6 else "")))
+        # else (deep=False): the cheap prefilter in scan() deliberately
+        # skips all of the above rather than approximating it with a
+        # count. It is only safe because it is *structurally* a weaker
+        # predicate than the strict pass - the same function with the
+        # episode-list conditions skipped, never a different or
+        # approximate test. A count-based approximation (comparing
+        # episodeCount to episodeFileCount) can disagree with the strict
+        # pass and block a show the strict pass would have passed,
+        # silently dropping it from the scan. Permissiveness must be true
+        # by construction, not by assertion.
 
         return (not reasons), reasons
 
@@ -213,7 +245,7 @@ def explain(lib, series, users):
           % (stats["episodeFileCount"], stats["episodeCount"]))
     print("  size on disk      : %.1f GB" % (stats["sizeOnDisk"] / 1e9))
     try:
-        missing, upcoming = lib.episode_facts(series["id"])
+        missing, upcoming, _ = lib.episode_facts(series["id"])
         print("  never downloaded  : %s"
               % (", ".join(missing) if missing else "none"))
         print("  not yet aired     : %d" % len(upcoming))

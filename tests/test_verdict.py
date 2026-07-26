@@ -63,6 +63,32 @@ def library(episodes):
                             now=NOW)
 
 
+def history_row(show="A Show", user="Watcher", season=2, ep=1,
+                watched=1.0, stopped=None):
+    """One Tautulli get_history row, in the shape watch_index() consumes."""
+    return {
+        "grandparent_title": show,
+        "friendly_name": user,
+        "parent_media_index": season,
+        "media_index": ep,
+        "watched_status": watched,
+        "stopped": LONG_AGO if stopped is None else stopped,
+    }
+
+
+def tautulli_library(rows):
+    """A Library wired to fixed Tautulli history instead of a live Tautulli.
+
+    get_history is paginated in the real API, so response.data is itself
+    {"data": [rows], ...} - one nesting level deeper than other Tautulli
+    endpoints. watch_index() unwraps that inner "data" key.
+    """
+    return broomarr.Library(
+        CONFIG,
+        fetch=lambda url, headers=None: {"response": {"data": {"data": rows}}},
+        now=NOW)
+
+
 def test_finished_show_is_safe():
     lib = library([episode(1, n) for n in range(1, 7)])
     safe, reasons = lib.verdict(series(), watchers(6, season=1))
@@ -129,10 +155,16 @@ def test_recent_view_blocks_rather_than_qualifies():
 
 
 def test_partial_watch_blocks():
+    """Rewritten against identifiers: the count comparison this asserted on
+    ("watched 3 of the 6") was deleted along with the count-based verdict
+    path. The behaviour it protected still holds - partial coverage still
+    blocks - it is now the identity join that catches it.
+    """
     lib = library([episode(1, n) for n in range(1, 7)])
     safe, reasons = lib.verdict(series(), watchers(3, season=1))
     assert not safe
-    assert any("watched 3 of the 6" in r for r in reasons)
+    assert any("S01E04" in r and "S01E05" in r and "S01E06" in r
+               for r in reasons)
 
 
 def test_no_history_at_all_blocks():
@@ -192,6 +224,109 @@ def test_cheap_pass_does_not_call_sonarr():
     lib = broomarr.Library(CONFIG, fetch=explode, now=NOW)
     safe, _ = lib.verdict(series(), watchers(6, season=1), deep=False)
     assert safe
+
+
+def test_watched_episodes_dont_match_on_disk_episodes_blocks_even_though_counts_agree():
+    """The regression case for the count-vs-identity defect.
+
+    Counts agree at 10 vs 10 - the watcher has 10 distinct episodes, and
+    10 episodes are on disk - so a count comparison passes this outright.
+    The watcher's 10 are S01E01-E10; the 10 on disk are S01E01-E07 plus
+    S02E01-E03. Season 2 was never watched. `missing` and `upcoming` are
+    both empty (nothing aired-without-file, nothing unaired), so only an
+    identity join catches this - a count cannot.
+    """
+    episodes = ([episode(1, n) for n in range(1, 8)]
+                + [episode(2, n) for n in range(1, 4)])
+    lib = library(episodes)
+    watched = {"Watcher": {"eps": {(1, n) for n in range(1, 11)},
+                           "last": LONG_AGO}}
+    safe, reasons = lib.verdict(series(on_disk=10, aired_count=10), watched)
+    assert not safe
+    assert any("S02E01" in r and "S02E02" in r and "S02E03" in r
+               for r in reasons)
+
+
+def test_identical_identities_with_equal_counts_is_safe():
+    """The identity check is not just a stricter check that blocks everything.
+
+    Same ten-on-disk shape as the regression case above, but this time the
+    watcher's identities actually match what is on disk. Must still pass -
+    a fix that always blocks is not a fix.
+    """
+    episodes = ([episode(1, n) for n in range(1, 8)]
+                + [episode(2, n) for n in range(1, 4)])
+    lib = library(episodes)
+    watched = {"Watcher": {"eps": ({(1, n) for n in range(1, 8)}
+                                   | {(2, n) for n in range(1, 4)}),
+                           "last": LONG_AGO}}
+    safe, reasons = lib.verdict(series(), watched)
+    assert safe, reasons
+
+
+def test_episode_in_unstarted_season_blocks():
+    """An episode on disk in a season the watcher never started must block,
+    independent of counts - here the watcher is one episode short of the
+    on-disk total anyway, but the point is the identity, not the count.
+    """
+    episodes = [episode(1, n) for n in range(1, 7)] + [episode(2, 1)]
+    lib = library(episodes)
+    safe, reasons = lib.verdict(series(), watchers(6, season=1))
+    assert not safe
+    assert any("S02E01" in r for r in reasons)
+
+
+def test_tautulli_string_season_episode_still_joins():
+    """Tautulli returns season/episode as strings in some API versions.
+
+    watch_index() must coerce both sides to int so the identifier sets in
+    verdict() actually intersect. A silent type mismatch here would make
+    every on-disk episode read as unwatched - safe, but useless, since it
+    would block every show forever without anyone noticing why.
+    """
+    rows = [history_row(season=str(2), ep=str(n)) for n in range(1, 7)]
+    lib = tautulli_library(rows)
+    index = lib.watch_index()
+    assert index["a show"]["Watcher"]["eps"] == {(2, n) for n in range(1, 7)}
+
+
+def test_unusable_season_or_episode_value_is_not_counted_as_watched():
+    """A history row whose season or episode cannot be coerced to an int
+    must not silently count as a watched episode - unknown blocks, it does
+    not pass by omission.
+    """
+    rows = [history_row(season=2, ep=1),
+           history_row(season=None, ep=2),
+           history_row(season=2, ep="not-a-number")]
+    lib = tautulli_library(rows)
+    index = lib.watch_index()
+    assert index["a show"]["Watcher"]["eps"] == {(2, 1)}
+
+
+def test_cheap_pass_never_blocks_what_the_strict_pass_would_examine():
+    """The prefilter invariant this tool depends on.
+
+    Take a case the strict pass blocks purely on the episode-list identity
+    check (not on a count - counts no longer drive any verdict path): the
+    on-disk episodes do not match what the watcher saw. The strict pass
+    must block it. The cheap pass, which does not look at episode data at
+    all, must let the same case through unconditionally - the prefilter
+    can never be stricter than the check it is filtering for.
+    """
+    episodes = [episode(1, n) for n in range(1, 7)] + [episode(2, 1)]
+    watched = watchers(6, season=1)
+
+    strict_lib = library(episodes)
+    strict_safe, strict_reasons = strict_lib.verdict(series(), watched)
+    assert not strict_safe
+    assert any("S02E01" in r for r in strict_reasons)
+
+    def explode(url, headers=None):
+        raise AssertionError("deep=False must not hit the episode endpoint")
+
+    cheap_lib = broomarr.Library(CONFIG, fetch=explode, now=NOW)
+    cheap_safe, _ = cheap_lib.verdict(series(), watched, deep=False)
+    assert cheap_safe
 
 
 def test_config_requires_the_keys_it_needs(tmp_path):
