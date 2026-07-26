@@ -1,7 +1,11 @@
 """Broomarr - which TV shows are actually safe to delete?
 
+    python src/broomarr.py --check            check config against both services
     python src/broomarr.py --all              scan the whole library
     python src/broomarr.py "Some Show"        explain one show
+
+USAGE below is the user-facing text for --help and bare invocation. Keep
+this docstring in step with it.
 
 Asks Sonarr what episodes really exist and Tautulli who watched them, and
 joins the two itself. That distinction is the whole point: tools that ask the

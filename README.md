@@ -56,12 +56,20 @@ Fill in `config/config.json`, which is gitignored so your keys stay local:
 
 ## Running it
 
-On Windows, `scripts\run.bat` prompts for the mode and keeps the window open. Otherwise:
+Run this first. It confirms both services answer and that your `watcher` matches a real Tautulli name, without scanning anything:
+
+```
+python src/broomarr.py --check
+```
+
+Then:
 
 ```
 python src/broomarr.py --all              scan the whole library
 python src/broomarr.py "Some Show"        explain one show in full
 ```
+
+On Windows, `scripts\run.bat` prompts for the mode and keeps the window open.
 
 The single-show form prints what Sonarr holds, which episodes were never downloaded, who watched how many and when, and every reason the show is or is not a candidate. Reach for it whenever you disagree with the scan - it is the same six conditions, shown working.
 
