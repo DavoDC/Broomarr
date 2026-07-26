@@ -37,7 +37,7 @@ That second section is the reason this exists.
 
 Every automated library cleaner asks the media server whether a show has been fully watched. The media server can only answer for episodes that were downloaded. A series where season 1 never arrived reports as fully watched the moment somebody finishes season 2, and its own episode counts agree, because **`episodeCount` in Sonarr excludes unmonitored episodes and so does `episodeFileCount`.** Two numbers agreeing is not confirmation when both share the same hidden filter.
 
-Broomarr never uses a count. It enumerates the real episode list from Sonarr, checks each episode individually, and joins that against the specific episodes Tautulli saw a specific person watch. `docs/DESIGN.md` has the full argument.
+Broomarr never uses a count. It enumerates the real episode list from Sonarr, checks each episode individually, and joins that against the specific episodes Tautulli saw a specific person watch. `docs/DESIGN.md` has the full argument, including a fair account of why [Maintainerr](https://github.com/jorenn92/Maintainerr) was used first and then replaced - it skips rules it cannot evaluate, and its watched-every-episode check is answered by Plex.
 
 ## The safety model
 

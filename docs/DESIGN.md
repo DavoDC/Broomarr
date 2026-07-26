@@ -37,6 +37,24 @@ Every such failure biases the same way: towards deleting more. None of them can 
 
 Broomarr inverts this. Every branch that cannot establish a fact returns a reason to block: no history at all, the watcher absent from the history, no last-view timestamp, an exception reading the episode list. There is no path through the logic where an unknown value results in a pass.
 
+## Why not Maintainerr
+
+Broomarr exists because [Maintainerr](https://github.com/jorenn92/Maintainerr) was tried first, for months, and turned out to be unsuitable for this particular job. That is worth stating plainly rather than leaving as a vague "I wanted something different", and it deserves to be said fairly: Maintainerr is a well-built, actively maintained tool that does what it advertises, and everything below is about a mismatch between what it is and what this job needs, not about defects in its craft. The findings are from **v3.18.0**, read from its source, and may not hold for other versions.
+
+Three things made it the wrong fit here.
+
+**Its rule engine skips what it cannot evaluate.** A rule is applied by removing items whose comparison returns false. When a value is unavailable there is nothing to compare, so the item is skipped - it stays in the set, and the log records `Skipping rule comparison because a value is unavailable`. For a rule that selects content, that is a reasonable default. For a rule that *protects* content, it means the protection silently stops applying while the configuration still reads as correct. There is no visible difference between a safety rule that ran and passed and one that never ran.
+
+**Its "watched every episode" check is answered by the media server.** It asks Plex for the show's seasons, then each season's episodes, then checks history for those. Episodes that were never downloaded are not in that list and therefore cannot fail the check. The phrase means "watched every episode currently in Plex", which is not the same claim, and the difference only shows up on partly-downloaded series - which is most of them, in a real library.
+
+**Rule evaluation and deletion are the same system.** Maintainerr flags media into a collection and hands that collection to a deletion handler after a grace period. That is its design and it works, but it means a rule that is subtly wrong becomes deleted files without anyone reading the list. Combined with the first two points, every failure mode biases the same way - towards deleting more - and the two outcomes are not symmetric.
+
+What made this concrete: a review of eight shows Maintainerr had queued for deletion found that none of them was safe to delete, and two would have passed every check its rule engine can express. One of those was a series where an entire early season had never been downloaded, so it read as fully watched by every available signal.
+
+**None of this is fixable by writing better rules,** which is the important part and the reason for a separate tool rather than a better configuration. The information needed - the real episode list, independent of what was downloaded - is not available to a tool that asks the media server. Sonarr has it. That makes it a data-source problem, and no rule expressed against the wrong data source can recover it.
+
+If your library is fully downloaded and you want automated deletion, Maintainerr is the more capable tool by a wide margin, and it has a UI. Broomarr is narrower on purpose: partial libraries, one decision, no automation, no deletion.
+
 ## Why it cannot delete
 
 Broomarr makes no write calls and touches no files. It is not a limitation to be lifted later - it is the property that makes the rest tolerable.
