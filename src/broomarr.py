@@ -22,6 +22,7 @@ import datetime
 import json
 import os
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -67,6 +68,27 @@ def http_get(url, headers=None):
     return json.loads(body) if body else None
 
 
+# Everything a bad connection, a bad response body or a bad response shape
+# can raise out of fetch(). urllib.error.URLError already covers HTTPError
+# (it is a subclass), and both are themselves OSError subclasses, but all
+# four are listed to say plainly what is being guarded against.
+SERVICE_ERRORS = (urllib.error.URLError, urllib.error.HTTPError, OSError,
+                  ValueError, KeyError)
+
+
+def _wrap_service_error(service, base_url, exc):
+    """Turn a low-level connection/parsing failure into a message a human
+    can act on: which service, the configured base URL (never an API key -
+    Sonarr's key travels in a header and is never in base_url; Tautulli's
+    key is only ever appended to a per-call query string, never present in
+    the configured base_url printed here), and what to check.
+    """
+    return OSError(
+        "%s at %s did not respond as expected (%s: %s). Check the URL is "
+        "correct, that %s is running, and the API key in config.json."
+        % (service, base_url, type(exc).__name__, exc, service))
+
+
 class Library:
     """Everything Broomarr knows, from the two services that actually know it.
 
@@ -85,8 +107,12 @@ class Library:
         return self._now or datetime.datetime.now(datetime.timezone.utc)
 
     def sonarr(self, path):
-        return self.fetch(self.cfg["sonarr_url"].rstrip("/") + path,
-                          {"X-Api-Key": self.cfg["sonarr_api_key"]})
+        try:
+            return self.fetch(self.cfg["sonarr_url"].rstrip("/") + path,
+                              {"X-Api-Key": self.cfg["sonarr_api_key"]})
+        except SERVICE_ERRORS as exc:
+            raise _wrap_service_error(
+                "Sonarr", self.cfg["sonarr_url"], exc) from exc
 
     def tautulli(self, cmd, **params):
         query = "".join("&%s=%s" % (k, urllib.parse.quote(str(v)))
@@ -94,7 +120,19 @@ class Library:
         url = "%s/api/v2?apikey=%s&cmd=%s%s" % (
             self.cfg["tautulli_url"].rstrip("/"),
             self.cfg["tautulli_api_key"], cmd, query)
-        return self.fetch(url)["response"]["data"]
+        try:
+            return self.fetch(url)["response"]["data"]
+        except SERVICE_ERRORS as exc:
+            raise _wrap_service_error(
+                "Tautulli", self.cfg["tautulli_url"], exc) from exc
+
+    def matches_watcher(self, name):
+        """The one matching rule for "is this Tautulli friendly name the
+        configured watcher" - case-insensitive substring. Shared by
+        verdict() and the config-sanity checks in scan() and check() so a
+        fix to the rule cannot drift between call sites.
+        """
+        return self.watcher.lower() in name.lower()
 
     def series(self):
         return self.sonarr("/api/v3/series")
@@ -179,8 +217,7 @@ class Library:
             return False, ["no watch history at all - "
                            "cannot confirm anyone finished it"]
 
-        watcher = next((n for n in users
-                        if self.watcher.lower() in n.lower()), None)
+        watcher = next((n for n in users if self.matches_watcher(n)), None)
         if watcher is None:
             return False, ["%s has no watch history for this show"
                            % self.watcher]
@@ -232,6 +269,31 @@ class Library:
         return (not reasons), reasons
 
 
+def _friendly_names(index):
+    """Every distinct Tautulli friendly name seen across watch_index()."""
+    names = set()
+    for users in index.values():
+        names.update(users.keys())
+    return names
+
+
+def _warn_if_watcher_unmatched(lib, friendly_names):
+    """Trap: a wrong `watcher` in config.json is otherwise indistinguishable
+    from a genuinely clean library - every show blocks with "no watch
+    history for this show" and nothing hints the config, not the library,
+    is wrong. Print a loud warning up front instead of failing silently.
+    """
+    if any(lib.matches_watcher(n) for n in friendly_names):
+        return
+    names_desc = (", ".join(sorted(friendly_names)) if friendly_names
+                  else "(none - Tautulli returned no watch history at all)")
+    print("[WARNING] configured watcher %r matches none of the Tautulli "
+          "friendly name(s) seen in history: %s" % (lib.watcher, names_desc))
+    print("[WARNING] every show will block until config.json's 'watcher' "
+          "is corrected.")
+    print()
+
+
 def explain(lib, series, users):
     stats = series["statistics"]
     print("=" * 72)
@@ -277,6 +339,7 @@ def scan(lib):
     print("Scanning library. Sonarr for what exists, Tautulli for who watched it.")
     all_series = lib.series()
     index = lib.watch_index()
+    _warn_if_watcher_unmatched(lib, _friendly_names(index))
     print("  %d series in Sonarr, %d with watch history\n"
           % (len(all_series), len(index)))
 
@@ -319,27 +382,95 @@ def scan(lib):
     print("\nDelete through Sonarr by hand. Broomarr never deletes anything.")
 
 
+def check(lib):
+    """Read-only, fast config sanity check: no per-episode calls.
+
+    Confirms Sonarr responds and how many series it sees, confirms Tautulli
+    responds and how many distinct friendly names appear in history, and
+    states whether the configured watcher matches one of them. This is what
+    to run before a first --all - unambiguous about pass or fail on each of
+    the three points, never a raw traceback.
+    """
+    print("Checking config.json against Sonarr and Tautulli.")
+    print()
+    all_ok = True
+
+    try:
+        count = len(lib.series())
+        print("[OK]   Sonarr responded - %d series" % count)
+    except SERVICE_ERRORS as exc:
+        print("[FAIL] %s" % exc)
+        all_ok = False
+
+    friendly_names = set()
+    try:
+        friendly_names = _friendly_names(lib.watch_index())
+        print("[OK]   Tautulli responded - %d distinct friendly name(s) "
+              "in history" % len(friendly_names))
+    except SERVICE_ERRORS as exc:
+        print("[FAIL] %s" % exc)
+        all_ok = False
+
+    if any(lib.matches_watcher(n) for n in friendly_names):
+        print("[OK]   watcher %r matches a Tautulli friendly name"
+              % lib.watcher)
+    else:
+        names_desc = (", ".join(sorted(friendly_names)) if friendly_names
+                      else "(none seen)")
+        print("[FAIL] watcher %r matches none of the friendly name(s) "
+              "seen: %s" % (lib.watcher, names_desc))
+        all_ok = False
+
+    print()
+    print("PASS - config.json looks correct." if all_ok else
+          "FAIL - fix the item(s) above before running --all.")
+    return all_ok
+
+
+USAGE = """\
+Broomarr - which TV shows are actually safe to delete?
+
+  python src/broomarr.py --all              scan the whole library
+  python src/broomarr.py "Some Show"        explain one show
+  python src/broomarr.py --check            check config.json against Sonarr and Tautulli
+  python src/broomarr.py --help             show this message
+
+Broomarr never deletes anything. It only ever prints a list; you delete
+through Sonarr yourself.
+"""
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if not argv:
-        print(__doc__)
+        print(USAGE)
         return 1
+    if argv[0] in ("--help", "-h"):
+        print(USAGE)
+        return 0
 
     lib = Library(load_config())
 
-    if argv[0] == "--all":
-        scan(lib)
-        return 0
+    if argv[0] == "--check":
+        return 0 if check(lib) else 1
 
-    wanted = " ".join(argv).lower()
-    matches = [s for s in lib.series() if wanted in s["title"].lower()]
-    if not matches:
-        print("No Sonarr series matching %r" % wanted)
+    try:
+        if argv[0] == "--all":
+            scan(lib)
+            return 0
+
+        wanted = " ".join(argv).lower()
+        matches = [s for s in lib.series() if wanted in s["title"].lower()]
+        if not matches:
+            print("No Sonarr series matching %r" % wanted)
+            return 1
+        index = lib.watch_index({s["title"].lower() for s in matches})
+        for series in matches:
+            explain(lib, series, index.get(series["title"].lower(), {}))
+        return 0
+    except SERVICE_ERRORS as exc:
+        print("[ERROR] %s" % exc)
         return 1
-    index = lib.watch_index({s["title"].lower() for s in matches})
-    for series in matches:
-        explain(lib, series, index.get(series["title"].lower(), {}))
-    return 0
 
 
 if __name__ == "__main__":

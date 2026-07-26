@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-07-26 - First-run legibility: --check, --help, and a watcher-mismatch warning
+
+The tool's only output is a list a human acts on, which makes legibility a safety
+property rather than a nicety. Four traps closed before the first real run.
+
+The worst was silent: a `watcher` value in `config.json` that matches no Tautulli
+friendly name makes every show block with "no watch history for this show", so the
+scan reports nothing safe to delete and looks exactly like a genuinely clean library.
+`scan()` now collects the friendly names actually present and warns up front, naming
+what was configured and what exists. The matching rule moved into
+`Library.matches_watcher()` so the warning and the verdict cannot drift apart - a
+warning derived from a second copy of the rule would eventually lie.
+
+Service failures no longer escape as a raw `urllib` traceback from the middle of a
+scan; `sonarr()` and `tautulli()` wrap connection, body and response-shape failures
+into a message naming the service and the configured base URL. The base URL is used
+deliberately rather than the request URL, because Tautulli's API key travels in the
+query string. `verdict()`'s per-series handler is unchanged and still turns these into
+a blocking reason rather than a fatal error - unknown blocks.
+
+Added `--check`, which confirms both services respond and whether the watcher matches,
+with no per-episode calls, and `--help`, so that bare invocation no longer relies on
+printing the module docstring by accident.
+
 ## 2026-07-26 - README rewrite: state the conditions, not sample output
 
 Commit `6c0471a`. Dropped the block of example terminal output from the README - it

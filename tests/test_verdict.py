@@ -89,6 +89,22 @@ def tautulli_library(rows):
         now=NOW)
 
 
+def checked_library(series_list, history_rows, watcher="Watcher"):
+    """A Library wired to both a fixed Sonarr series list and fixed Tautulli
+    history, dispatching on which service's base URL the call was for - for
+    exercising --check and the scan() watcher-mismatch warning, neither of
+    which touches the per-episode endpoint.
+    """
+    cfg = dict(CONFIG, watcher=watcher)
+
+    def fetch(url, headers=None):
+        if url.startswith(cfg["sonarr_url"]):
+            return series_list
+        return {"response": {"data": {"data": history_rows}}}
+
+    return broomarr.Library(cfg, fetch=fetch, now=NOW)
+
+
 def test_finished_show_is_safe():
     lib = library([episode(1, n) for n in range(1, 7)])
     safe, reasons = lib.verdict(series(), watchers(6, season=1))
@@ -339,3 +355,75 @@ def test_config_requires_the_keys_it_needs(tmp_path):
 def test_missing_config_is_a_clear_error(tmp_path):
     with pytest.raises(SystemExit):
         broomarr.load_config(str(tmp_path / "nope.json"))
+
+
+def test_matches_watcher_is_case_insensitive_substring():
+    """The rule reused everywhere a Tautulli friendly name is checked
+    against the configured watcher: case-insensitive substring."""
+    lib = library([])
+    assert lib.matches_watcher("Watcher")
+    assert lib.matches_watcher("SuperWatcherFan")
+    assert lib.matches_watcher("watcher")
+    assert not lib.matches_watcher("Someone Else")
+
+
+def test_verdict_uses_the_same_matching_rule_as_matches_watcher():
+    """verdict() must not reimplement the matching rule - it has to call
+    matches_watcher() so a fix to one rule fixes both call sites. Proven
+    behaviourally: a name that only matches via case-insensitive substring
+    (not equality) still gets picked up as the watcher inside verdict().
+    """
+    lib = library([episode(1, n) for n in range(1, 7)])
+    users = {"SuperWatcherFan": {"eps": {(1, n) for n in range(1, 7)},
+                                 "last": LONG_AGO}}
+    safe, reasons = lib.verdict(series(), users)
+    assert safe, reasons
+
+
+def test_check_passes_when_watcher_matches_a_friendly_name(capsys):
+    lib = checked_library([series()], [history_row(user="Watcher")])
+    ok = broomarr.check(lib)
+    assert ok
+    out = capsys.readouterr().out
+    assert "[FAIL]" not in out
+
+
+def test_check_fails_when_watcher_matches_no_friendly_name(capsys):
+    lib = checked_library([series()], [history_row(user="Someone Else")])
+    ok = broomarr.check(lib)
+    assert not ok
+    out = capsys.readouterr().out
+    assert "[FAIL]" in out
+    assert "Someone Else" in out
+
+
+def test_check_does_not_call_the_episode_endpoint():
+    """--check has to be fast and read-only: no per-episode calls."""
+    def explode(url, headers=None):
+        if "/episode" in url:
+            raise AssertionError("--check must not hit the episode endpoint")
+        if url.startswith(CONFIG["sonarr_url"]):
+            return [series()]
+        return {"response": {"data": {"data": [history_row(user="Watcher")]}}}
+
+    lib = broomarr.Library(CONFIG, fetch=explode, now=NOW)
+    broomarr.check(lib)
+
+
+def test_scan_warns_when_watcher_matches_no_friendly_name(capsys):
+    """The trap this guards: a wrong `watcher` value is otherwise
+    indistinguishable from a genuinely clean library - every show blocks
+    with no hint that the config, not the library, is the problem."""
+    lib = checked_library([series()], [history_row(user="Someone Else")])
+    broomarr.scan(lib)
+    out = capsys.readouterr().out
+    assert "[WARNING]" in out
+    assert "Someone Else" in out
+
+
+def test_scan_does_not_warn_when_watcher_matches_a_friendly_name(capsys):
+    lib = checked_library(
+        [series()], [history_row(user="Watcher", stopped=YESTERDAY)])
+    broomarr.scan(lib)
+    out = capsys.readouterr().out
+    assert "[WARNING]" not in out
