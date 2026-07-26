@@ -1,6 +1,6 @@
 # Broomarr - working notes
 
-Public repo. Nothing personal goes in here: no real profile names, no real show titles, no household context, no paths outside this repo. `config/config.json` holds the live credentials and is gitignored - never commit it, never quote its contents in a commit message, an issue or a doc.
+Private on GitHub, written as though it were public - that is deliberate, so publishing stays a one-click decision rather than a cleanup project. Nothing personal goes in here: no real profile names, no real show titles, no household context, no paths outside this repo. `config/config.json` holds the live credentials and is gitignored - never commit it, never quote its contents in a commit message, an issue or a doc.
 
 ## Invariants
 
