@@ -10,3 +10,11 @@ venv/
 # Local scan output
 *.log
 captures/
+
+# Claude Code local state, except the shared guard hooks (deployed on purpose)
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/guard.sh
+!.claude/hooks/guard.py

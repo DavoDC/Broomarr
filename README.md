@@ -98,6 +98,8 @@ The suite is mostly deletions that must not happen, including a regression fixtu
 
 TV only for now. Movies are a simpler version of the same join and are the next thing planned. Broomarr talks to Sonarr and Tautulli directly, so it works alongside whatever else manages your library, and reads from both - it holds no state of its own.
 
+**Status:** Active development. TV support is complete; movie support is next.
+
 ## Licence
 
 MIT.
