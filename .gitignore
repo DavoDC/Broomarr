@@ -11,10 +11,6 @@ venv/
 *.log
 captures/
 
-# Claude Code local state, except the shared guard hooks (deployed on purpose)
-.claude/*
-!.claude/settings.json
-!.claude/hooks/
-.claude/hooks/*
-!.claude/hooks/guard.sh
-!.claude/hooks/guard.py
+# Claude Code local state. The guard hook is registered at machine (user) level,
+# not per-repo - never commit anything under .claude/ in this repo.
+.claude/
