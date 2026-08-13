@@ -1,6 +1,13 @@
 # Real credentials. config/config.example.json is the tracked template.
 config/config.json
 
+# Timestamped backups of that file, written by the API key rotation tooling
+# before it rewrites a key. The rule above is path-exact and never covered
+# these siblings, so they sat unignored in a public repo holding a live key.
+# Match by suffix rather than by path so any future backup is covered wherever
+# it lands.
+*.bak-*
+
 __pycache__/
 *.py[cod]
 .pytest_cache/
