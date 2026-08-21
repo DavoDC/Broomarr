@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-08-21 - First real hand-run, and a reviewable dry-run report
+
+Confirmed by reading the source, not the README, that Broomarr already had
+no unreviewed-execution mode to build a dry run against: `broomarr.py` has
+no `--delete` flag, no write call to any API (every `fetch()` call is a
+plain `urllib` GET, dispatched through `http_get` with no `data` argument),
+and no filesystem access outside reading `config.json`. There was nothing
+to make safe that was not already safe - the whole tool already is the dry
+run.
+
+What was missing was a report a human could actually judge a call from.
+`scan()`'s SAFE TO DELETE section printed a title and a size only - a
+verdict with the evidence stripped out. Added `src/dry_run_report.py`,
+which reuses `Library.verdict()` and `Library.episode_facts()` unchanged
+(it computes no safety decision of its own - tests assert the safe/blocked
+split and every reason string come straight from `verdict()`) and adds the
+evidence scan() already computes internally but never prints: who matched
+as watcher, last-watched date, the quiet-period margin, episode counts, and
+the specific missing/unwatched/upcoming episode identifiers. Sorts so the
+closest calls lead: SAFE TO DELETE puts a show that only just cleared the
+quiet period first regardless of size, then largest reclaim first; BLOCKED
+puts the fewest-blocking-reasons shows first, since those are the ones
+worth a second look, not the ones blocked six ways at once. Writes to
+`captures/` (already gitignored), never Downloads. Tests first, per repo
+convention - `tests/test_dry_run_report.py`, including an adversarial case
+asserting a partially-watched show can never land in `safe_items`.
+
+Ran `--check` then the new report against the real library (197 series,
+Sonarr and Tautulli both live on localhost). 18 series survived the cheap
+prefilter, 3 came back safe (Gracepoint, Chernobyl, Fawlty Towers - 53 GB),
+15 blocked, all on real evidence (unwatched episodes on disk, or aired
+episodes never downloaded). Full report in `captures/dry-run-report-*.txt`
+(gitignored, local only).
+
+Adversarial read of `verdict()` and the join found one real, currently
+dormant gap: the Sonarr-Tautulli join keys on lowercased title with no
+`tvdbId` or rating-key cross-check, so two same-titled shows would merge
+their watch history. Not triggered today (no duplicate titles in the
+current library) but structural, not incidental - tracked in
+`docs/IDEAS.md`. Also noted: `watch_index()` requests Tautulli history
+with `length=50000` and no explicit sort order; today's library returns
+2,108 rows (`recordsFiltered`) newest-first, so no truncation risk
+currently exists, but if it ever did, the newest-first order means it
+would drop the oldest rows rather than the most recent "last watched"
+timestamp - the safe direction, not a bug, but worth a comment in code if
+the library grows enough to matter.
+
 ## 2026-07-26 - First-run legibility: --check, --help, and a watcher-mismatch warning
 
 The tool's only output is a list a human acts on, which makes legibility a safety

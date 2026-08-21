@@ -6,13 +6,32 @@ Single source of truth for all pending work in this repo. Settled decisions and 
 
 ## Current Focus
 
-Nothing blocking. The tool is ready for its first hand-run by its owner: run `python src/broomarr.py --check` first, then `--all`. Movie support is the next real piece of work, and should not start until the TV side has actually been used against a live library.
+Movie support is the next real piece of work. The first hand-run against the
+real library is done - see `docs/HISTORY.md` (2026-08-21).
 
 ---
 
 ## Pending - Main Work
 
 *(Ordered by priority. Quick wins go FIRST within each tier - small, unblocked items before large/blocked ones. Items that are blocked or depend on other items go below their prerequisite.)*
+
+---
+
+**The Sonarr-Tautulli join is by lowercased title, not a stable ID, and two
+shows sharing a title would merge their watch history.** `watch_index()` keys
+its dict by `grandparent_title.strip().lower()`, and `scan()`/`verdict()`
+look up `series["title"].lower()` against it - there is no `tvdbId` or
+rating-key cross-check anywhere in the join. Two Sonarr entries with the
+same title (a US/UK remake, a reboot with an unchanged name) would read
+from the *same* merged bucket of watched episodes, so watching S01E01 of one
+could count as watching S01E01 of the other. Not live today - a scan of the
+current 197-series library found no duplicate titles - but it is a
+structural gap, not a today's-data coincidence, and it gets more likely as
+the library grows. Worth deciding whether to key on `tvdbId` (Sonarr has
+it; Tautulli's episode history rows do not carry it directly, so it would
+need a Sonarr title->tvdbId lookup merged in) or at minimum warn on a
+duplicate title the way `_warn_if_watcher_unmatched` warns on a
+watcher mismatch.
 
 ---
 
