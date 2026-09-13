@@ -29,7 +29,7 @@ Condition 6 is worth saying out loud: **watching something recently blocks delet
 
 **No decision is ever made from a count.** Condition 2 is not "watched 10, and 10 are on disk". It is a comparison of which episodes, one by one. Counts hide things: Sonarr's own `episodeCount` and `episodeFileCount` both exclude unmonitored episodes, so they can agree while an entire season is missing. Two numbers agreeing is not corroboration when both carry the same hidden filter.
 
-Together these are why Broomarr asks Sonarr rather than the media server. Plex, Jellyfin and Emby can only tell you about episodes that were downloaded, so a half-fetched series reports as fully watched the moment somebody finishes a later season. Sonarr knows the real episode list. `docs/DESIGN.md` makes the full argument, including a fair account of why [Maintainerr](https://github.com/jorenn92/Maintainerr) was used first and then replaced.
+Together these are why Broomarr asks Sonarr rather than the media server. Plex, Jellyfin and Emby can only tell you about episodes that were downloaded, so a half-fetched series reports as fully watched the moment somebody finishes a later season. Sonarr knows the real episode list. `docs/References/DevContext.md` makes the full argument, including a fair account of why [Maintainerr](https://github.com/jorenn92/Maintainerr) was used first and then replaced.
 
 ## Broomarr never deletes anything
 

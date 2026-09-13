@@ -1,4 +1,4 @@
-# Why Broomarr asks Sonarr instead of the media server
+# Architecture rationale: why Broomarr asks Sonarr instead of the media server
 
 Broomarr exists because of one gap that every rule-based library cleaner shares, and because of one property of rule engines that turns that gap into deleted files.
 

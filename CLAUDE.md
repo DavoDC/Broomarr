@@ -1,10 +1,12 @@
 # Broomarr - working notes
 
-Private on GitHub, written as though it were public - that is deliberate, so publishing stays a one-click decision rather than a cleanup project. Nothing personal goes in here: no real profile names, no real show titles, no household context, no paths outside this repo. `config/config.json` holds the live credentials and is gitignored - never commit it, never quote its contents in a commit message, an issue or a doc.
+**This repo is public on GitHub.** Nothing personal goes in here: no real profile names, no real show titles, no household context, no paths outside this repo. `config/config.json` holds the live credentials and is gitignored - never commit it, never quote its contents in a commit message, an issue or a doc.
+
+Architecture rationale (why Sonarr not Plex, why Maintainerr was retired) lives in `docs/References/DevContext.md` - CLAUDE.md stays orientation-only.
 
 ## Invariants
 
-**Broomarr never deletes.** No `--delete` flag, no write call to any API, no filesystem access. If a request would add one, say no and explain why - `docs/DESIGN.md` has the argument. This is the property the whole safety case rests on.
+**Broomarr never deletes.** No `--delete` flag, no write call to any API, no filesystem access. If a request would add one, say no and explain why - `docs/References/DevContext.md` has the argument. This is the property the whole safety case rests on.
 
 **An unknown value blocks.** Every branch in `verdict()` that cannot establish a fact must append a reason. Adding a code path where a failure results in a pass is the one defect class that matters here. Skip-on-unknown is what made the predecessor tool unsafe.
 

@@ -11,7 +11,7 @@ Asks Sonarr what episodes really exist and Tautulli who watched them, and
 joins the two itself. That distinction is the whole point: tools that ask the
 media server "has this been fully watched?" only ever learn about episodes
 that were downloaded, so a half-fetched series reads as finished. See
-docs/DESIGN.md.
+docs/References/DevContext.md.
 
 The one rule that keeps this safe: an unknown value blocks. Anything that
 cannot be established is a reason not to delete, never a check that quietly
@@ -176,7 +176,7 @@ class Library:
         not yet aired, and the (season, episode) identifiers of every
         aired episode that has a file. Counting from the episode list
         rather than from the series statistics avoids two separate traps -
-        see docs/DESIGN.md.
+        see docs/References/DevContext.md.
         """
         now = self.now()
         missing, upcoming, on_disk_eps = [], [], set()
