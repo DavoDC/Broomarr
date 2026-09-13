@@ -6,9 +6,34 @@ Single source of truth for all pending work in this repo. Settled decisions and 
 
 ## Current Focus
 
-Movie support is the next real piece of work. The first hand-run against the
-real library is done - see `docs/HISTORY.md` (2026-08-21). The competitive
-landscape re-scan and its source-level audit are also done - see
+Building movie support (Radarr), the confirm-delete backend, and the GUI
+together in one pass, by explicit decision - overriding the dependency order
+below (movie support, then the confirm-delete UI, then the GUI skin). An Opus
+subagent designs the combined brief first; a Sonnet subagent builds it against
+that brief; a further Sonnet subagent then browser-tests the built GUI. See
+the three entries below for the individual pieces this pass now does at once.
+
+**The design is done and lives in `docs/design/`** (new folder, for proposals
+about unbuilt work; `docs/References/DevContext.md` stays an account of what
+exists). Three files: `reclaim-backend-design.md` (the Radarr join, the staged
+hold-then-delete path and its seven interlocks, the empty-versus-unreadable
+fix, and drafted replacement text for the invariant sections of `CLAUDE.md`,
+`README.md` and `DevContext.md`), `gui-design.md` (layout, the NiceGUI stack
+decision and what it costs, mutate-versus-observe sidebar grouping, tab
+structure), and `build-brief.md` (the ordered, test-first build steps). The
+open questions the entries below used to carry are answered there; what
+remains below is the record of why each piece was wanted.
+
+Three design decisions worth knowing without opening those files. **The
+dependency invariant was re-scoped, not broken:** `src/broomarr.py` and the new
+`src/reclaim.py` stay stdlib-only and the CLI keeps working with no
+`pip install`; only `gui/` may depend on anything. **Deletion moved to its own
+module** so the part that decides is not the part that acts, which is precisely
+what Maintainerr does not do. **No timer ever deletes** - the hold elapsing only
+makes an item offerable, and a human confirms a second time against a freshly
+recomputed verdict.
+
+The competitive landscape re-scan and its source-level audit are done - see
 `docs/HISTORY.md` (both 2026-09-14 entries) and `docs/ALTERNATIVES.md`.
 Verdict: keep building, but the reasons are practical (licence, stack weight,
 problem size) rather than architectural - two other tools do read Sonarr's
@@ -27,7 +52,19 @@ specifically, not the data source.
 
 ---
 
-**Audit `episode_facts()` for the empty-vs-unreadable collapse.** Small, safety-relevant, and prompted by reaper's handling of the same problem. reaper keeps an `episodes_read` flag beside its episode map and types the map `Mapping | None` specifically so an empty map from a failed Sonarr call cannot impersonate a show with no episodes ("a missing episode map is `None`, never `{}`"). Broomarr's verdict is a set difference, `on_disk_eps - watched_eps`, and an empty `on_disk_eps` yields an empty difference - which reads as "nothing unwatched on disk," which is a *pass*. That is a fail-open hiding inside a fail-closed design. `verdict()` does append a block reason on an exception reading the episode list, so the live path is probably fine; the point is that "probably" is the wrong standard for this class of defect and there should be a test asserting that an empty or unreadable episode list blocks rather than passes. Check every path that can produce an empty `on_disk_eps`, not just the exception one.
+**Audit `episode_facts()` for the empty-vs-unreadable collapse.** Designed, not
+yet built - the fix is specified in `docs/design/reclaim-backend-design.md`
+section 2 and is **step 1** of `docs/design/build-brief.md`, promoted to the
+front of that build because the same pass attaches a delete button to
+`verdict()`'s output and shipping a delete path over a known fail-open in the
+function feeding it would be indefensible. The design confirms the hole is
+live: a literal `[]` from Sonarr's episode endpoint raises nothing, so
+`verdict()`'s exception handler never fires and all three downstream falsy
+checks no-op into a pass. Fix is three independent changes (a named
+`UnreadableFacts` raise, an `on_disk_eps` that is `None` rather than empty when
+unestablished, and a `verdict()` block on an empty on-disk set even after a
+successful read), any one of which alone would prevent it. Original note
+follows. Small, safety-relevant, and prompted by reaper's handling of the same problem. reaper keeps an `episodes_read` flag beside its episode map and types the map `Mapping | None` specifically so an empty map from a failed Sonarr call cannot impersonate a show with no episodes ("a missing episode map is `None`, never `{}`"). Broomarr's verdict is a set difference, `on_disk_eps - watched_eps`, and an empty `on_disk_eps` yields an empty difference - which reads as "nothing unwatched on disk," which is a *pass*. That is a fail-open hiding inside a fail-closed design. `verdict()` does append a block reason on an exception reading the episode list, so the live path is probably fine; the point is that "probably" is the wrong standard for this class of defect and there should be a test asserting that an empty or unreadable episode list blocks rather than passes. Check every path that can produce an empty `on_disk_eps`, not just the exception one.
 
 ---
 
@@ -35,7 +72,7 @@ specifically, not the data source.
 
 ---
 
-**FUTURE OPTION, NOT A DECISION: opt-in auto-delete, armed only after a demonstrated reliability bar.** This is recorded as a proposal under consideration. Broomarr does not delete today and `CLAUDE.md` and `README.md` are accurate as written; nothing here changes them. **If this is ever built, updating the "Broomarr never deletes" invariant in both files is part of the work, not an afterthought** - and the argument in `docs/References/DevContext.md` ("Why it cannot delete") would need answering explicitly rather than quietly superseded.
+**FUTURE OPTION, NOT A DECISION: opt-in auto-delete, armed only after a demonstrated reliability bar.** This is recorded as a proposal under consideration, and it remains one: the human-confirmed path being designed now is deliberately *not* this, and nothing in that design arms anything. The paragraph below said "Broomarr does not delete today and `CLAUDE.md` and `README.md` are accurate as written." That stops being true when `docs/design/build-brief.md` step 5 lands; the invariant rewrite it asked for as a prerequisite is drafted in `docs/design/reclaim-backend-design.md` section 5, and the `DevContext.md` argument it asked to be answered explicitly is answered in section 4. So the prerequisite this entry named is satisfied by the confirm-flow work, not by this entry - which makes the ordering note at the end of it more important, not less: **the confirm flow is the better answer to the same friction and it costs no automation; auto-delete is only worth reconsidering if that turns out not to be enough.** One piece of it is being built regardless, per its own argument below: the History tab is the persisted per-run record that would make any future reliability streak evidence rather than recollection.
 
 The case for opening it: the media is re-downloadable, so the cost of a wrong deletion is usually bandwidth and inconvenience rather than loss, and the manual step is the main friction in actually using the tool. The case against a blanket flip: re-downloadability is not uniform (out-of-print, unusual cuts, anything personal), a wrong deletion is typically noticed weeks later by the person who wanted to watch it, and a *systematic* fault removes fifty shows rather than one, which is expensive even at a low per-item cost. See `docs/ALTERNATIVES.md`, "Are these the right axes?", for the full reasoning.
 
@@ -71,7 +108,22 @@ watcher mismatch.
 
 ---
 
-**Movie support via Radarr.** Radarr has no
+**Movie support via Radarr.** Designed in
+`docs/design/reclaim-backend-design.md` section 1; build steps in
+`docs/design/build-brief.md` step 2. The design settles the open questions this
+entry left: the join key is `(normalised_title, year)` rather than title alone,
+since remakes sharing a title are the norm in film but sharing a title *and* a
+year is not; `movie_facts()` returns `MovieFacts | None` where `None` means
+"could not establish", never "there is nothing"; Radarr is **optional**, so a
+config without it stays a valid TV-only install; and `MovieLibrary.verdict()`
+deliberately takes no `deep` parameter, because the bulk `/api/v3/movie`
+response already carries every field the verdict needs and a parameter that is
+always the same value is a place for a future bug to hide. The design also
+names the movie side's weakest point, which this entry did not anticipate:
+a partial view is the *entire* watch signal for a film, where on the TV side it
+is harmless because the set difference still names the other episodes - so
+Tautulli's `watched_status >= 0.5` threshold is load-bearing on the movie side
+in a way it is not on the TV side. Original note follows. Radarr has no
 episode concept, so the join is simpler than the Sonarr side: one film either
 has a file or does not, and Tautulli's `media_type=movie` history gives a
 single watched/not-watched fact per user instead of a per-episode set. The
@@ -83,9 +135,24 @@ of how many films somebody watched.
 
 ---
 
-**Web UI for user-confirmed deletion.** Broomarr's invariant is that it never deletes - `verdict()` only produces a reason to block or a candidate to remove, and every existing entry point is read-only. This idea does not weaken that invariant in code; it adds a human in the loop who confirms each removal. A user knows what they've actually watched better than any heuristic does, so the UI's job is to surface `verdict()`'s candidates sorted by watch percentage, let a user tick the ones they recognise as watched, and only then call the one delete path that gets added, on their confirmation, not the algorithm's. This is the mirror image of a media request tool, which lets people ask for additions - here they retire what they've finished.
+**Web UI for user-confirmed deletion.** Designed in
+`docs/design/reclaim-backend-design.md` section 3 (the state machine, the seven
+interlocks, the exact Sonarr and Radarr delete calls) and section 4 (the
+answer to `DevContext.md`'s "why it cannot delete", on that argument's own
+terms); interface in `docs/design/gui-design.md`; build steps in
+`docs/design/build-brief.md` steps 3 and 4. The invariant rewrite this entry
+anticipated is drafted verbatim in `reclaim-backend-design.md` section 5, for
+`CLAUDE.md`, `README.md` and `DevContext.md`, to be applied in the same commit
+as the code that makes it true. Two design choices the entry left open: the
+staging is a hold queue with a second typed human confirmation rather than a
+soft delete to a holding folder, because the hold already provides the
+reversal window and a file-moving variant would mean Broomarr gaining
+filesystem and path-mapping awareness (much the larger change); and the write
+path lives in a new `src/reclaim.py` so `src/broomarr.py` keeps its literal
+read-only property and the part that decides is not the part that acts.
+Original note follows. Broomarr's invariant is that it never deletes - `verdict()` only produces a reason to block or a candidate to remove, and every existing entry point is read-only. This idea does not weaken that invariant in code; it adds a human in the loop who confirms each removal. A user knows what they've actually watched better than any heuristic does, so the UI's job is to surface `verdict()`'s candidates sorted by watch percentage, let a user tick the ones they recognise as watched, and only then call the one delete path that gets added, on their confirmation, not the algorithm's. This is the mirror image of a media request tool, which lets people ask for additions - here they retire what they've finished.
 
-Build and use it locally first, against a real library, before any of it is network-reachable. If it's ever hosted for remote access, that deserves its own design-time review - a separate, narrower artifact from the local tool rather than the same code with a flag flipped, login required, and no bulk enumeration of the library from the confirm screen. Deletion itself should stay staged (flag for removal, hold, then actually delete) rather than immediate, so a wrong tap doesn't cost a file. None of this starts before movie support (Radarr) lands and the TV side has had a real hand-run, per Current Focus above.
+Build and use it locally first, against a real library, before any of it is network-reachable. If it's ever hosted for remote access, that deserves its own design-time review - a separate, narrower artifact from the local tool rather than the same code with a flag flipped, login required, and no bulk enumeration of the library from the confirm screen. Deletion itself should stay staged (flag for removal, hold, then actually delete) rather than immediate, so a wrong tap doesn't cost a file. None of this starts before movie support (Radarr) lands and the TV side has had a real hand-run, per Current Focus above. (One-off override in progress: this pass builds movie support, this UI's delete backend, and the GUI skin below together, by explicit decision - not a change to the default ordering for future work.)
 
 **When it does become remote-reachable, reach it over a private mesh network rather than a port forward.** A mesh VPN such as Tailscale, or its self-hosted equivalent Headscale, binds the app to a private address shared only between enrolled devices. There is no open port for a scanner to find, and someone who is not already on the network cannot reach the login page at all, let alone probe it. The free tier covers a household-sized set of devices, and node sharing invites one specific person to one specific service without handing them the rest of the network. It also replaces the certificate problem: a mesh network encrypts the link without anyone generating a self-signed certificate that every client then has to be told to trust.
 
@@ -101,7 +168,7 @@ The same argument generalises beyond this repo. Anything self-written and reacha
 
 ---
 
-**Recommendation: land protected-media exclusions before the web UI's confirm screen ships.** Of the three items below, the exclusion list is the smallest and it gates the deletion-confirmation UI in the "Pending - Main Work" section above - a confirm screen with no exclusion support could surface a protected title as a normal candidate. Do this one first, the GUI redesign second (cosmetic, no safety dependency), and treat the remote-access idea as exploratory since it depends on constraints on a specific device that need confirming before any design work starts.
+**Recommendation: land protected-media exclusions before the web UI's confirm screen ships.** **This recommendation is being overridden by the combined pass in Current Focus, and that is a real, named gap rather than an oversight.** The confirm screen is being built without exclusion support, so a protected title will appear as a normal candidate and the only thing standing between it and removal is the human reading the list - which is, to be fair, the entire premise of the confirm flow, and the hold queue gives a week to catch it. But the risk this entry identified is genuine and is not mitigated by the design, only survived by it. Build exclusions next, before the first real removal if practical. Of the three items below, the exclusion list is the smallest and it gates the deletion-confirmation UI in the "Pending - Main Work" section above - a confirm screen with no exclusion support could surface a protected title as a normal candidate. Do this one first, the GUI redesign second (cosmetic, no safety dependency), and treat the remote-access idea as exploratory since it depends on constraints on a specific device that need confirming before any design work starts.
 
 ---
 
@@ -109,7 +176,20 @@ The same argument generalises beyond this repo. Anything self-written and reacha
 
 ---
 
-**GUI redesign closer to Sonarr/Radarr/Overseerr's look.** Broomarr's own web UI (once the user-confirmed deletion UI above exists) could follow the visual pattern of the *arr suite or Overseerr rather than a bespoke layout - dark theme, poster-grid browsing, sortable tables. Check whether an existing local repo's frontend (an audio-library manager app on this machine) has reusable layout/component patterns before building from scratch, per the pattern-copy research approach. Depends entirely on the web UI existing first (see "Web UI for user-confirmed deletion" above) - this is a skin on that, not a separate feature.
+**GUI redesign closer to Sonarr/Radarr/Overseerr's look.** Designed in
+`docs/design/gui-design.md`; build steps in `docs/design/build-brief.md` step
+4. The "check an existing local repo's frontend first" instruction below was
+followed: AudioManager's `docs/References/GUI-Architecture.md` supplied the
+sidebar-tab layout, the mutate-versus-observe grouping, the rejected
+auto-run-on-launch pattern (read cached state, show staleness, offer a manual
+Re-run) and the "GUI is not a replacement for CLI" principle, all adopted. The
+one judgment call that entry could not have anticipated: **NiceGUI is a new
+dependency and `CLAUDE.md`'s stdlib-only invariant had to be re-scoped rather
+than quietly broken** - the boundary is now drawn at the directory, with
+`src/` staying dependency-free and testable on a bare Python install and only
+`gui/` allowed to depend on anything, enforced by a test. Reasoning and the
+rejected alternatives are in the design doc's stack section. Original note
+follows. Broomarr's own web UI (once the user-confirmed deletion UI above exists) could follow the visual pattern of the *arr suite or Overseerr rather than a bespoke layout - dark theme, poster-grid browsing, sortable tables. Check whether an existing local repo's frontend (an audio-library manager app on this machine) has reusable layout/component patterns before building from scratch, per the pattern-copy research approach. Depends entirely on the web UI existing first (see "Web UI for user-confirmed deletion" above) - this is a skin on that, not a separate feature. (One-off override in progress, per Current Focus above: built in the same pass as the confirm-delete UI, not after it.)
 
 ---
 
