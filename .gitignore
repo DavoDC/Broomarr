@@ -18,6 +18,11 @@ venv/
 *.log
 captures/
 
+# Reclaim state - the hold queue, the removal history, and cached posters.
+# Never tracked: this is per-install runtime state, not source.
+state/
+gui/.cache/
+
 # Claude Code local state. The guard hook is registered at machine (user) level,
 # not per-repo - never commit anything under .claude/ in this repo.
 .claude/

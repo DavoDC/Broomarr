@@ -10,5 +10,11 @@
   "radarr_api_key": "PUT_YOUR_RADARR_API_KEY_HERE",
 
   "watcher": "Some User",
-  "quiet_days": 14
+  "quiet_days": 14,
+
+  "_comment_reclaim": "Optional - all four have defaults and only matter once something is flagged for the hold queue in the GUI. hold_days is the cooling-off period before a flagged item can be offered for removal; max_scan_age_days refuses to act on evidence older than this; max_items/max_bytes cap a single removal run and abort it entirely rather than partially applying it.",
+  "hold_days": 7,
+  "max_scan_age_days": 3,
+  "max_items": 10,
+  "max_bytes": 250000000000
 }

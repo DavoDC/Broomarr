@@ -41,6 +41,56 @@ Radarr is not configured in this environment's live `config/config.json`, so
 here - only the injected-fetch unit tests in `tests/test_movie_verdict.py`
 confirm this side, same pattern as the rest of the suite.
 
+## 2026-09-14 - The reclaim path: a staged hold queue and the delete calls
+
+Third step of the build brief. Added `src/reclaim.py` - the only module in
+Broomarr that can write to Sonarr or Radarr. It imports `broomarr` and calls
+`Library.verdict()`/`MovieLibrary.verdict()`; `broomarr.py` never imports
+`reclaim`, and stays GET-only forever, which `tests/test_reclaim.py`'s
+`test_broomarr_module_issues_no_non_get_request` checks directly by scanning
+the source for `method=`.
+
+Three stored states - PENDING, CANCELLED, REMOVED - persisted in
+`state/reclaim-queue.json` (new `state/` gitignore entry). "DUE" is never
+stored: `Queue.is_due()` computes it from `flagged_at` plus the new
+`hold_days` config key (default 7) at query time, so nothing is running when
+nobody has the GUI open. Both the queue file and the append-only removal
+history at `state/reclaim-history.json` are written atomically, via a
+sibling `.tmp` file and `os.replace()`.
+
+`reclaim.execute()` runs seven interlocks, in order, before any delete, and
+aborts the whole run rather than acting partially if any of them (other than
+re-verification, which only drops the items that fail it) refuses:
+
+1. Scan freshness - refuses evidence older than `max_scan_age_days` (new
+   config key, default 3).
+2. Hold elapsed - refuses anything not yet due.
+3. Live re-verification - recomputes `verdict()` from scratch against Sonarr/
+   Radarr/Tautulli right now; anything that no longer comes back safe returns
+   to PENDING with the new reason and a restarted hold, and is excluded from
+   the rest of the run.
+4. Cap - refuses the entire run over `max_items` (default 10) or `max_bytes`
+   (default 250 GB), abort-not-truncate.
+5. Canary - deletes the smallest item alone first and confirms the service
+   reports it gone before touching anything else.
+6. Per-item re-read immediately before each delete call.
+7. Record immediately after each individual deletion, not at the end of the
+   run - a crash mid-run leaves a truthful account of what is already gone.
+
+The two delete calls: `DELETE {sonarr_url}/api/v3/series/{id}?deleteFiles=
+true&addImportListExclusion=false` and `DELETE {radarr_url}/api/v3/movie/
+{id}?deleteFiles=true&addImportExclusion=false` - note the differing
+parameter name. The Sonarr route and method were verified live against this
+environment's real Sonarr instance: a full OpenAPI/Swagger JSON spec could
+not be fetched through the browser-facing Swagger UI (every path returned
+either 404 or the HTML shell rather than JSON), so instead a `DELETE` was
+sent to a deliberately nonexistent series id (999999999); it came back with
+an HTTP 500 whose body showed the request reached Sonarr's real
+delete-lookup code path, failing only on "no such id" - confirming the route
+and method without touching any real data. Radarr is not configured in this
+environment, so its `addImportExclusion` parameter name could not be
+verified live and is sourced only from `docs/design/reclaim-backend-design.md`.
+
 ## 2026-09-14 - The empty-versus-unreadable collapse fixed on the TV side
 
 Fixed the fail-open `docs/design/reclaim-backend-design.md` section 2 diagnosed:
