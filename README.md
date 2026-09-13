@@ -2,13 +2,13 @@
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/G2G31WKOCN)
 
-**Find the TV shows you can safely delete, without ever suggesting one somebody was halfway through.**
+**Find the TV shows and movies you can safely delete, without ever suggesting one somebody was halfway through.**
 
-Broomarr reads your Sonarr library and your Tautulli watch history and answers one question per show: has the person who was watching this actually finished it, and is there genuinely nothing left for them to watch? It prints a shortlist. You delete through Sonarr yourself.
+Broomarr reads your Sonarr library (and Radarr, if you have it configured) and your Tautulli watch history, and answers one question per show or movie: has the person who was watching this actually finished it, and is there genuinely nothing left for them to watch? It prints a shortlist. You delete through Sonarr or Radarr yourself.
 
 ## What it checks
 
-Broomarr makes **one decision** - safe to delete, or not - and it applies **six conditions, all of which must hold**. It is not a rule engine and there is nothing to configure beyond who the watcher is and how long the quiet period lasts. That is deliberate: a rule you can express is a rule you can express wrongly.
+Broomarr makes **one decision** - safe to delete, or not - and on the TV side it applies **six conditions, all of which must hold**. It is not a rule engine and there is nothing to configure beyond who the watcher is and how long the quiet period lasts. That is deliberate: a rule you can express is a rule you can express wrongly.
 
 A show is safe to delete only when all six are true:
 
@@ -22,6 +22,8 @@ A show is safe to delete only when all six are true:
 | 6 | Nobody has touched it recently | inside the quiet period, 14 days by default |
 
 Condition 6 is worth saying out loud: **watching something recently blocks deletion.** It never counts towards it.
+
+A movie is a simpler version of the same idea, since there is no season or episode structure to check: it must have a file on disk, Radarr must report it as released (not announced or in cinemas), the watcher's Tautulli history for it must show a completed view (a partial view blocks - for a film that partial view is the entire watch signal, there is no per-episode set difference to fall back on), and that view must sit outside the quiet period. The join between Radarr and Tautulli is on (title, year), never title alone, and two Radarr entries that happen to share both are treated as indistinguishable and both blocked rather than guessed at.
 
 ## The two ideas that make it different
 
@@ -51,12 +53,13 @@ Fill in `config/config.json`, which is gitignored so your keys stay local:
 |---|---|
 | `sonarr_url`, `sonarr_api_key` | Sonarr, Settings - General - API Key |
 | `tautulli_url`, `tautulli_api_key` | Tautulli, Settings - Web Interface - API Key |
+| `radarr_url`, `radarr_api_key` (optional) | Radarr, Settings - General - API Key. Set both to enable movies, or leave both out - one without the other is refused at startup rather than silently half-working. |
 | `watcher` | the Tautulli friendly name whose viewing decides, matched case-insensitively as a substring |
 | `quiet_days` | how long a show must be left alone, default 14 |
 
 ## Running it
 
-Run this first. It confirms both services answer and that your `watcher` matches a real Tautulli name, without scanning anything:
+Run this first. It confirms every configured service answers and that your `watcher` matches a real Tautulli name, without scanning anything:
 
 ```
 python src/broomarr.py --check
@@ -65,7 +68,8 @@ python src/broomarr.py --check
 Then:
 
 ```
-python src/broomarr.py --all              scan the whole library
+python src/broomarr.py --all              scan TV, and movies too if Radarr is configured
+python src/broomarr.py --movies           scan movies only (needs radarr_url/radarr_api_key)
 python src/broomarr.py "Some Show"        explain one show in full
 ```
 
@@ -83,9 +87,9 @@ The suite is mostly deletions that must not happen, including regression fixture
 
 ## Scope
 
-TV only. Movies are a simpler version of the same join and are planned next. Broomarr holds no state, reads from both services and writes to neither, so it sits alongside whatever else manages your library.
+TV and movies. Broomarr holds no state, reads from Sonarr, Radarr and Tautulli and writes to none of them, so it sits alongside whatever else manages your library.
 
-**Status:** Active development. TV support is complete; movie support is next.
+**Status:** Active development. TV and movie support are both complete; a reviewable hold-and-confirm reclaim flow and a GUI are next.
 
 ## Licence
 

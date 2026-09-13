@@ -24,4 +24,4 @@ python src/broomarr.py "Title"     explain one show
 
 ## Layout
 
-`src/broomarr.py` is the whole tool - standard library only, no dependencies, Python 3.8+. `Library` takes an injectable `fetch` and `now` so the decision logic is testable without live services; tests never hit the network. `tests/test_verdict.py` is mostly deletions that must not happen. New safety behaviour gets a test first.
+`src/broomarr.py` is the whole tool - standard library only, no dependencies, Python 3.8+. `Library` (TV) and `MovieLibrary` (movies) both take an injectable `fetch` and `now`, and both build on a shared `_ServiceClient` base (Tautulli client, `matches_watcher()`) so the two sides cannot drift; tests never hit the network. The movie join is `_movie_key()` - `(title.lower(), year)`, never title alone - and two Radarr entries sharing a key both block, since `verdict()` cannot tell them apart. `tests/test_verdict.py` and `tests/test_movie_verdict.py` are mostly deletions that must not happen. New safety behaviour gets a test first.

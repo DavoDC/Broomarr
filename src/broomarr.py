@@ -1,27 +1,31 @@
-"""Broomarr - which TV shows are actually safe to delete?
+"""Broomarr - which TV shows and movies are actually safe to delete?
 
-    python src/broomarr.py --check            check config against both services
-    python src/broomarr.py --all              scan the whole library
+    python src/broomarr.py --check            check config against every configured service
+    python src/broomarr.py --all              scan TV, and movies if Radarr is configured
+    python src/broomarr.py --movies           scan movies only (needs radarr_url/radarr_api_key)
     python src/broomarr.py "Some Show"        explain one show
 
 USAGE below is the user-facing text for --help and bare invocation. Keep
 this docstring in step with it.
 
-Asks Sonarr what episodes really exist and Tautulli who watched them, and
-joins the two itself. That distinction is the whole point: tools that ask the
-media server "has this been fully watched?" only ever learn about episodes
-that were downloaded, so a half-fetched series reads as finished. See
-docs/References/DevContext.md.
+Asks Sonarr what episodes really exist, Radarr what movies really exist, and
+Tautulli who watched them, and joins the two itself. That distinction is the
+whole point: tools that ask the media server "has this been fully watched?"
+only ever learn about episodes that were downloaded, so a half-fetched
+series reads as finished. See docs/References/DevContext.md.
 
 The one rule that keeps this safe: an unknown value blocks. Anything that
 cannot be established is a reason not to delete, never a check that quietly
-does not apply.
+does not apply. Radarr is optional - config.json without radarr_url/
+radarr_api_key simply skips the movie side; --movies and the movie half of
+--all otherwise use the same MovieLibrary.verdict() joining on (title, year).
 
 Read-only by design, permanently. This must never grow a --delete flag - an
 unrun script deletes nothing, which is the entire reason it is safe to rely
-on. Deletion stays a deliberate manual action in Sonarr.
+on. Deletion stays a deliberate manual action in Sonarr or Radarr.
 """
 
+import collections
 import datetime
 import json
 import os
@@ -48,6 +52,14 @@ def load_config(path=CONFIG):
                if not cfg.get(k)]
     if missing:
         raise SystemExit("config.json is missing: %s" % ", ".join(missing))
+    # Radarr is optional, but only as a pair - one key without the other is
+    # a config that looks configured and silently never scans movies.
+    has_radarr_url = bool(cfg.get("radarr_url"))
+    has_radarr_key = bool(cfg.get("radarr_api_key"))
+    if has_radarr_url != has_radarr_key:
+        raise SystemExit(
+            "config.json has radarr_url without radarr_api_key (or the "
+            "other way round) - set both to enable movies, or neither.")
     cfg.setdefault("quiet_days", 14)
     return cfg
 
@@ -90,6 +102,42 @@ class UnreadableFacts(Exception):
     """
 
 
+def matches_watcher(watcher, name):
+    """The one matching rule for "is this Tautulli friendly name the
+    configured watcher" - case-insensitive substring. Module-level so
+    Library (TV) and MovieLibrary (movies) share exactly one copy; a fix
+    to the rule cannot drift between the two sides.
+    """
+    return watcher.lower() in name.lower()
+
+
+# Radarr statuses this side actually recognises. Anything else - a status
+# Radarr adds later, or a bad response - blocks as unrecognised rather
+# than being treated as "not released" by a fallback default. Only
+# "released" ever counts as released; "inCinemas" is deliberately treated
+# the same as "announced" here, because a cinema release is not the
+# release this tool cares about - a digital/disk copy can still be coming.
+RECOGNISED_MOVIE_STATUSES = ("announced", "inCinemas", "released")
+
+
+def _movie_key(obj):
+    """The two-part join key for movies: (lowercased title, year) - never
+    title alone, since two different films can share a title. Works for
+    both a Radarr movie dict and a Tautulli history row; both carry
+    "title" and "year". Returns None if the title is missing or the year
+    does not coerce to int, so a row that cannot be keyed is skipped
+    rather than joined to the wrong film - see _to_int().
+    """
+    title = obj.get("title")
+    year = _to_int(obj.get("year"))
+    if not title or year is None:
+        return None
+    return (title.strip().lower(), year)
+
+
+MovieFacts = collections.namedtuple("MovieFacts", ["on_disk", "released"])
+
+
 def _wrap_service_error(service, base_url, exc):
     """Turn a low-level connection/parsing failure into a message a human
     can act on: which service, the configured base URL (never an API key -
@@ -103,11 +151,13 @@ def _wrap_service_error(service, base_url, exc):
         % (service, base_url, type(exc).__name__, exc, service))
 
 
-class Library:
-    """Everything Broomarr knows, from the two services that actually know it.
+class _ServiceClient:
+    """Shared config/fetch/now setup and the Tautulli client - Library (TV)
+    and MovieLibrary (movies) are otherwise independent, but querying
+    Tautulli and knowing "is this my watcher" must not have two copies.
 
     `fetch` is injectable so the decision logic can be tested without a
-    running Sonarr or Tautulli.
+    running Sonarr, Radarr or Tautulli.
     """
 
     def __init__(self, config, fetch=http_get, now=None):
@@ -119,14 +169,6 @@ class Library:
 
     def now(self):
         return self._now or datetime.datetime.now(datetime.timezone.utc)
-
-    def sonarr(self, path):
-        try:
-            return self.fetch(self.cfg["sonarr_url"].rstrip("/") + path,
-                              {"X-Api-Key": self.cfg["sonarr_api_key"]})
-        except SERVICE_ERRORS as exc:
-            raise _wrap_service_error(
-                "Sonarr", self.cfg["sonarr_url"], exc) from exc
 
     def tautulli(self, cmd, **params):
         query = "".join("&%s=%s" % (k, urllib.parse.quote(str(v)))
@@ -141,12 +183,22 @@ class Library:
                 "Tautulli", self.cfg["tautulli_url"], exc) from exc
 
     def matches_watcher(self, name):
-        """The one matching rule for "is this Tautulli friendly name the
-        configured watcher" - case-insensitive substring. Shared by
-        verdict() and the config-sanity checks in scan() and check() so a
-        fix to the rule cannot drift between call sites.
+        """Shared by verdict() and the config-sanity checks in scan() and
+        check() so a fix to the rule cannot drift between call sites.
         """
-        return self.watcher.lower() in name.lower()
+        return matches_watcher(self.watcher, name)
+
+
+class Library(_ServiceClient):
+    """Everything Broomarr knows about TV, from Sonarr and Tautulli."""
+
+    def sonarr(self, path):
+        try:
+            return self.fetch(self.cfg["sonarr_url"].rstrip("/") + path,
+                              {"X-Api-Key": self.cfg["sonarr_api_key"]})
+        except SERVICE_ERRORS as exc:
+            raise _wrap_service_error(
+                "Sonarr", self.cfg["sonarr_url"], exc) from exc
 
     def series(self):
         return self.sonarr("/api/v3/series")
@@ -316,6 +368,145 @@ class Library:
         return (not reasons), reasons
 
 
+class MovieLibrary(_ServiceClient):
+    """Everything Broomarr knows about movies, from Radarr and Tautulli.
+
+    The join is per-instance-cached and two-part: (title, year), never
+    title alone - see _movie_key(). A partial view is the whole watch
+    signal for a film (there is no per-episode set difference to fall
+    back on the way there is on the TV side), so movie_watch_index()
+    tracks "started but never finished" as its own distinct state rather
+    than collapsing it into "no history".
+    """
+
+    def __init__(self, config, fetch=http_get, now=None):
+        super().__init__(config, fetch=fetch, now=now)
+        self._movies_cache = None
+
+    def radarr(self, path):
+        try:
+            return self.fetch(self.cfg["radarr_url"].rstrip("/") + path,
+                              {"X-Api-Key": self.cfg["radarr_api_key"]})
+        except SERVICE_ERRORS as exc:
+            raise _wrap_service_error(
+                "Radarr", self.cfg["radarr_url"], exc) from exc
+
+    def movies(self):
+        """Radarr's bulk movie list, cached for this instance's lifetime -
+        _duplicate_keys(), movie_facts() and verdict() all need it and a
+        scan should not re-fetch it once per movie.
+        """
+        if self._movies_cache is None:
+            self._movies_cache = self.radarr("/api/v3/movie")
+        return self._movies_cache
+
+    def _duplicate_keys(self):
+        """(title, year) keys shared by two or more Radarr movies - both
+        must block, since the join cannot tell them apart.
+        """
+        counts = {}
+        for movie in self.movies():
+            key = _movie_key(movie)
+            if key is None:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+        return {key for key, count in counts.items() if count > 1}
+
+    def movie_watch_index(self):
+        """Distinct watch state per film per user, from Tautulli history.
+
+        Returns {(title_lower, year): {user: {"watched": bool, "last": epoch}}}.
+        "watched" only becomes True on a row with watched_status >= 0.5 -
+        Tautulli records a partial view as history too, and for a film
+        that partial view is the only signal there is, so it must stay
+        visible as "started but never finished" rather than vanish into
+        "no history at all". A row whose year will not coerce to int is
+        skipped entirely, never counted as watched.
+        """
+        rows = self.tautulli("get_history", media_type="movie",
+                             length=50000)["data"]
+        index = {}
+        for row in rows:
+            key = _movie_key(row)
+            if key is None:
+                continue
+            user = index.setdefault(key, {}).setdefault(
+                row["friendly_name"], {"watched": False, "last": 0})
+            if (row.get("watched_status") or 0) >= 0.5:
+                user["watched"] = True
+                user["last"] = max(user["last"], row.get("stopped") or 0)
+        return index
+
+    def movie_facts(self, movie_id):
+        """MovieFacts for one Radarr movie id, or None if no movie in the
+        bulk list has that id - a missing map is None, never a
+        MovieFacts of empty/false fields, so a caller cannot mistake "no
+        such movie" for "a movie with nothing on disk".
+        """
+        match = next((m for m in self.movies() if m.get("id") == movie_id),
+                     None)
+        if match is None:
+            return None
+        return MovieFacts(on_disk=bool(match.get("hasFile")),
+                          released=(match.get("status") == "released"))
+
+    def verdict(self, movie, users):
+        """Is this movie safe to delete? Returns (safe, [reasons it is not]).
+
+        Unknown blocks, same as Library.verdict() - every path that
+        cannot establish a fact returns a reason rather than passing.
+        """
+        reasons = []
+
+        try:
+            duplicates = self._duplicate_keys()
+        except Exception as exc:
+            return False, ["could not read movie list from Radarr: %s" % exc]
+
+        key = _movie_key(movie)
+        if key is not None and key in duplicates:
+            reasons.append("another movie in Radarr and this one share "
+                           "this title and year - cannot tell them apart")
+
+        if not movie.get("hasFile"):
+            reasons.append("no file on disk")
+
+        status = movie.get("status")
+        if status == "released":
+            pass
+        elif status in RECOGNISED_MOVIE_STATUSES:
+            reasons.append("not yet released (status: %s)" % status)
+        else:
+            reasons.append("unrecognised Radarr status: %r" % status)
+
+        if not users:
+            reasons.append("no watch history at all - "
+                           "cannot confirm anyone finished it")
+        else:
+            watcher = next((n for n in users if self.matches_watcher(n)),
+                           None)
+            if watcher is None:
+                reasons.append("%s has no watch history for this movie"
+                               % self.watcher)
+            elif not users[watcher]["watched"]:
+                reasons.append("%s started but never finished this movie"
+                               % self.watcher)
+            else:
+                last = users[watcher]["last"]
+                if not last:
+                    reasons.append("no last-view timestamp - "
+                                   "cannot apply the quiet period")
+                else:
+                    days = int((self.now().timestamp() - last)
+                              // SECONDS_PER_DAY)
+                    if days < self.quiet_days:
+                        reasons.append(
+                            "watched %d days ago - inside the %d-day "
+                            "quiet period" % (days, self.quiet_days))
+
+        return (not reasons), reasons
+
+
 def _friendly_names(index):
     """Every distinct Tautulli friendly name seen across watch_index()."""
     names = set()
@@ -434,14 +625,62 @@ def scan(lib):
     print("\nDelete through Sonarr by hand. Broomarr never deletes anything.")
 
 
-def check(lib):
+def movie_scan(lib):
+    """The movie equivalent of scan(): every Radarr movie through
+    MovieLibrary.verdict(), joined to Tautulli history by (title, year).
+
+    No cheap prefilter pass here - unlike per-episode Sonarr calls, the
+    Radarr movie list and the Tautulli movie history are each one bulk
+    call regardless of how many movies are examined, so there is nothing
+    a prefilter would save.
+    """
+    print("Scanning movie library. Radarr for what exists, Tautulli for "
+          "who watched it.")
+    movies = lib.movies()
+    index = lib.movie_watch_index()
+    print("  %d movie(s) in Radarr\n" % len(movies))
+
+    safe_list, blocked = [], []
+    for movie in movies:
+        key = _movie_key(movie)
+        users = index.get(key, {}) if key else {}
+        ok, reasons = lib.verdict(movie, users)
+        (safe_list if ok else blocked).append((movie, reasons))
+
+    print("=" * 72)
+    print("SAFE TO DELETE")
+    print("=" * 72)
+    if not safe_list:
+        print("  nothing")
+    for movie, _ in sorted(safe_list,
+                           key=lambda x: -x[0].get("sizeOnDisk", 0)):
+        print("  %-45s %7.1f GB" % (movie["title"][:45],
+                                    movie.get("sizeOnDisk", 0) / 1e9))
+    total = sum(m.get("sizeOnDisk", 0) for m, _ in safe_list) / 1e9
+    print("\n  %d movie(s), %.1f GB" % (len(safe_list), total))
+
+    if blocked:
+        print()
+        print("=" * 72)
+        print("BLOCKED")
+        print("=" * 72)
+        for movie, reasons in blocked:
+            print("  %s" % movie["title"])
+            for reason in reasons:
+                print("      - %s" % reason)
+    print("\nDelete through Radarr by hand. Broomarr never deletes anything.")
+
+
+def check(lib, movie_lib=None):
     """Read-only, fast config sanity check: no per-episode calls.
 
     Confirms Sonarr responds and how many series it sees, confirms Tautulli
     responds and how many distinct friendly names appear in history, and
     states whether the configured watcher matches one of them. This is what
     to run before a first --all - unambiguous about pass or fail on each of
-    the three points, never a raw traceback.
+    the three points, never a raw traceback. Also checks Radarr, but only
+    when movie_lib is given - i.e. only when radarr_url/radarr_api_key are
+    both set in config.json.
     """
     print("Checking config.json against Sonarr and Tautulli.")
     print()
@@ -453,6 +692,14 @@ def check(lib):
     except SERVICE_ERRORS as exc:
         print("[FAIL] %s" % exc)
         all_ok = False
+
+    if movie_lib is not None:
+        try:
+            count = len(movie_lib.movies())
+            print("[OK]   Radarr responded - %d movie(s)" % count)
+        except SERVICE_ERRORS as exc:
+            print("[FAIL] %s" % exc)
+            all_ok = False
 
     friendly_names = set()
     try:
@@ -480,15 +727,16 @@ def check(lib):
 
 
 USAGE = """\
-Broomarr - which TV shows are actually safe to delete?
+Broomarr - which TV shows and movies are actually safe to delete?
 
-  python src/broomarr.py --all              scan the whole library
+  python src/broomarr.py --all              scan TV, and movies if Radarr is configured
+  python src/broomarr.py --movies           scan movies only (needs radarr_url/radarr_api_key)
   python src/broomarr.py "Some Show"        explain one show
-  python src/broomarr.py --check            check config.json against Sonarr and Tautulli
+  python src/broomarr.py --check            check config.json against every configured service
   python src/broomarr.py --help             show this message
 
 Broomarr never deletes anything. It only ever prints a list; you delete
-through Sonarr yourself.
+through Sonarr or Radarr yourself.
 """
 
 
@@ -501,14 +749,27 @@ def main(argv=None):
         print(USAGE)
         return 0
 
-    lib = Library(load_config())
+    cfg = load_config()
+    lib = Library(cfg)
+    movie_lib = MovieLibrary(cfg) if cfg.get("radarr_url") else None
 
     if argv[0] == "--check":
-        return 0 if check(lib) else 1
+        return 0 if check(lib, movie_lib) else 1
 
     try:
         if argv[0] == "--all":
             scan(lib)
+            if movie_lib is not None:
+                print()
+                movie_scan(movie_lib)
+            return 0
+
+        if argv[0] == "--movies":
+            if movie_lib is None:
+                print("[ERROR] Radarr is not configured in config.json - "
+                      "set radarr_url and radarr_api_key to use --movies.")
+                return 1
+            movie_scan(movie_lib)
             return 0
 
         wanted = " ".join(argv).lower()

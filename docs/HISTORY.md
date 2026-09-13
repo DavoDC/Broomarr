@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-09-14 - Movie support: Radarr joins Sonarr and Tautulli
+
+Second step of the build brief in `docs/design/build-brief.md`, following the
+empty-versus-unreadable fix. Added `MovieLibrary` alongside `Library`, both
+now built on a shared `_ServiceClient` base so the Tautulli client and the
+`matches_watcher()` rule exist exactly once instead of twice. `matches_watcher()`
+itself moved to a module-level function for the same reason.
+
+The movie join is two-part - `_movie_key()` returns `(title.lower(), year)`,
+never title alone, because two different films can share a title the way two
+different shows rarely do in one library. A row or Radarr entry whose year
+will not coerce to `int` is skipped rather than joined to the wrong film. Two
+Radarr entries that share a `(title, year)` key are both flagged and both
+block, since the join cannot tell them apart - `_duplicate_keys()` computes
+this from the same cached bulk movie list `movie_facts()` and `verdict()`
+also use, so a scan does not re-fetch Radarr per movie.
+
+The one design point worth stating: a partial Tautulli view is the *entire*
+watch signal for a movie, where on the TV side it is harmless because the set
+difference still names the specific unwatched episodes. `movie_watch_index()`
+therefore tracks "started but never finished" as its own state
+(`watched_status < 0.5`) rather than folding it into "no history at all" -
+`verdict()` gives it a distinct reason so a partially-watched film is never
+mistaken for one nobody touched.
+
+`load_config()` now treats `radarr_url`/`radarr_api_key` as an optional pair:
+either both are set or neither is, since one without the other would look
+configured and silently never scan movies. `--movies` scans movies alone;
+`--all` scans TV and, if Radarr is configured, movies too; `--check` verifies
+Radarr the same way it verifies Sonarr and Tautulli, only when configured.
+`tests/test_movie_verdict.py` covers the join, the duplicate-key case, the
+partial-view case, an unreachable Radarr (blocks, does not skip), and the
+`movie_facts()` "missing id returns None, not an empty MovieFacts" contract.
+
+Radarr is not configured in this environment's live `config/config.json`, so
+`--check`/`--movies` against a real Radarr instance could not be hand-verified
+here - only the injected-fetch unit tests in `tests/test_movie_verdict.py`
+confirm this side, same pattern as the rest of the suite.
+
 ## 2026-09-14 - The empty-versus-unreadable collapse fixed on the TV side
 
 Fixed the fail-open `docs/design/reclaim-backend-design.md` section 2 diagnosed:

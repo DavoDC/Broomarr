@@ -1,7 +1,8 @@
 @echo off
-REM Launcher for Broomarr. Offers the two modes broomarr.py supports:
-REM   1. --all      scan the whole library
+REM Launcher for Broomarr. Offers the modes broomarr.py supports:
+REM   1. --all      scan TV, and movies too if Radarr is configured
 REM   2. one title   explain a single show
+REM   3. --movies   scan movies only (needs radarr_url/radarr_api_key)
 REM --no-pause skips the menu (defaults to a full scan) and exits cleanly
 REM instead of leaving the window open - see feedback_windows.md.
 title Broomarr
@@ -25,8 +26,9 @@ if "%1"=="--no-pause" (
     echo.
     echo   1. Scan whole library  (--all)
     echo   2. Explain one show
+    echo   3. Scan movies only    (--movies)
     echo.
-    set /p MODE="Choose [1/2]: "
+    set /p MODE="Choose [1/2/3]: "
     echo.
 )
 
@@ -34,6 +36,7 @@ REM The prompt and its use must not share a parenthesised block: batch
 REM expands %SHOWTITLE% when it parses the block, which is before set /p
 REM has run, so an if/else here would always pass an empty title.
 if "%MODE%"=="2" goto explain
+if "%MODE%"=="3" goto movies
 
 python src\broomarr.py --all
 goto finished
@@ -41,6 +44,10 @@ goto finished
 :explain
 set /p SHOWTITLE="Show title: "
 python src\broomarr.py "%SHOWTITLE%"
+goto finished
+
+:movies
+python src\broomarr.py --movies
 
 :finished
 echo.
