@@ -81,7 +81,7 @@ reality, and a reader has no way to check it either way. Replaced it with the si
 conditions in plain language, laid out as a table, and a direct answer to "is this a
 rule engine" (no, and why not). Field-level implementation detail that used to live in
 the README moved out to `CLAUDE.md` instead, following the routing split: README is
-what a new reader needs to decide whether to use the tool, `docs/DESIGN.md` carries
+what a new reader needs to decide whether to use the tool, `docs/References/DevContext.md` carries
 the design argument, `CLAUDE.md` carries the implementation detail Claude needs when
 touching the code.
 
@@ -102,7 +102,7 @@ by comparing `len(watched_eps)` to `stats["episodeFileCount"]` - two integers, n
 which episodes they actually were. Equal counts with different identities read as
 safe: a watcher who had seen S01E01 through E10 while S02E01 through E03 sat on disk
 unwatched produced two equal numbers and a pass. `episodeFileCount` is also the count
-`docs/DESIGN.md` already argues against on separate grounds, so the one check whose
+`docs/References/DevContext.md` already argues against on separate grounds, so the one check whose
 entire thesis is "never decide from a count" was itself deciding from one.
 
 Fixed by having `episode_facts()` return the on-disk `(season, episode)` identifiers
@@ -116,5 +116,5 @@ cheap prefilter was deleted rather than patched: the prefilter is only safe beca
 it is structurally a weaker version of the strict check, the same function with the
 episode-list conditions skipped, never an approximation of them. Regression tests
 cover the count-agrees-but-identities-differ case and the prefilter-never-stricter
-invariant. `docs/DESIGN.md` gained a third trap section on why a count comparison is
+invariant. `docs/References/DevContext.md` gained a third trap section on why a count comparison is
 unsafe even without a hidden filter involved.
