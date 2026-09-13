@@ -7,13 +7,27 @@ Single source of truth for all pending work in this repo. Settled decisions and 
 ## Current Focus
 
 Movie support is the next real piece of work. The first hand-run against the
-real library is done - see `docs/HISTORY.md` (2026-08-21).
+real library is done - see `docs/HISTORY.md` (2026-08-21). The competitive
+landscape re-scan is also done - see `docs/HISTORY.md` (2026-09-14) and
+`docs/ALTERNATIVES.md` - verdict: keep building.
 
 ---
 
 ## Pending - Main Work
 
 *(Ordered by priority. Quick wins go FIRST within each tier - small, unblocked items before large/blocked ones. Items that are blocked or depend on other items go below their prerequisite.)*
+
+---
+
+**HIGHEST PRIORITY - blocking, do first: audit and enrich `docs/ALTERNATIVES.md`, resolve every "Not stated" cell against real source, and re-open the auto-delete question.** Two things prompted this: (1) `docs/ALTERNATIVES.md` was written from README/doc claims only - several tools' rows say "Not stated" for enumeration and unknown-handling because their public docs don't say, not because the code was checked; (2) the comparison table implicitly treats "auto-deletes" as a strike against a tool, on the assumption that a wrong deletion is costly - worth re-examining given that this media is easily re-downloadable, which changes the actual cost of a wrong auto-delete. Plan, in order:
+
+1. Clone the still-active alternatives plus `reaper` into `C:\Users\David\GitHubRepos\NOT_MY_REPOS` (Maintainerr, Reclaimerr, PrunArr, Deleterr, Purgeomatic, OCDarr, reaper - skip the low-activity/archived/abandoned ones, they're not credible fork candidates).
+2. Read each clone's actual watched-status/deletion logic and replace every "Not stated" cell in the comparison table with a real, source-checked answer.
+3. Only then re-judge: is "auto-deletes" still the right thing to penalize a tool for, given re-downloadable media lowers the cost of a wrong call? Should Broomarr itself gain an opt-in auto-delete mode once it's proven reliable against a real library for a while? This is a real option now, not ruled out by default - but it changes the "never deletes anything itself" invariant in `CLAUDE.md` and `README.md`, so it needs to land as its own deliberate decision, not a quiet edit alongside the doc enrichment.
+4. Is `reaper` (closest philosophical match, but pre-release and does not confirm per-episode enumeration in its docs) worth forking instead of continuing to build Broomarr from scratch, once its actual code is checked?
+5. Are "true per-episode enumeration" and "unknown blocks" still the right columns to be comparing on, or does the redownloadable-media framing change which properties actually matter?
+
+Findings and any revised verdict go into `docs/ALTERNATIVES.md` itself (and `docs/HISTORY.md` once settled) - this entry is the task only.
 
 ---
 
@@ -62,6 +76,22 @@ The same argument generalises beyond this repo. Anything self-written and reacha
 ## Lower Priority / Future
 
 *(Ordered by size - smaller/quicker first. These are not urgent but worth doing eventually.)*
+
+---
+
+**Recommendation: land protected-media exclusions before the web UI's confirm screen ships.** Of the three items below, the exclusion list is the smallest and it gates the deletion-confirmation UI in the "Pending - Main Work" section above - a confirm screen with no exclusion support could surface a protected title as a normal candidate. Do this one first, the GUI redesign second (cosmetic, no safety dependency), and treat the remote-access idea as exploratory since it depends on constraints on a specific device that need confirming before any design work starts.
+
+---
+
+**Protected-media exclusion list.** Some titles (a specific rewatch favourite, say) and some whole categories (anime as a category, for example) should never be surfaced as a deletion candidate at all, regardless of watch state - not "warn and let a human override," but excluded from `verdict()` before a candidate is ever produced. This wants two levels: an exact-title (or stable-ID) exclude list in `config.json`, and a category/genre-level exclude flag, since Sonarr exposes genre/tag metadata per series. Needs a decision on whether the category match is a hardcoded genre string or a configurable list, and whether exclusion is silent (title never appears anywhere) or shows up in `explain()` as "excluded, not evaluated" for transparency.
+
+---
+
+**GUI redesign closer to Sonarr/Radarr/Overseerr's look.** Broomarr's own web UI (once the user-confirmed deletion UI above exists) could follow the visual pattern of the *arr suite or Overseerr rather than a bespoke layout - dark theme, poster-grid browsing, sortable tables. Check whether an existing local repo's frontend (an audio-library manager app on this machine) has reusable layout/component patterns before building from scratch, per the pattern-copy research approach. Depends entirely on the web UI existing first (see "Web UI for user-confirmed deletion" above) - this is a skin on that, not a separate feature.
+
+---
+
+**Exploratory: chat-bot confirmation flow as an alternative to browser + mesh VPN access.** The remote-access plan above (mesh VPN such as Tailscale) assumes a device can run a VPN client freely. Some devices only allow one active VPN profile system-wide, which could conflict with another VPN already in use on that device. If that constraint holds, a chat-bot interface (e.g. a messaging-platform bot) that sends a candidate list and accepts a reply as confirmation could substitute for reaching the web UI directly, without opening a port. This is speculative - the actual constraint needs verifying on the specific device before any design work, and it must not reduce the human-confirms-each-deletion invariant to a single blanket "yes." **This repo is public** - do not record who the approving household members are anywhere in it; a generic "approver" role in config is fine, specific people are not.
 
 ---
 

@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-09-14 - Competitive landscape re-scan: keep building
+
+Before movie support, the GUI, or anything else got more investment, checked
+whether some other project already does Broomarr's job well enough to fork
+or adopt instead. `docs/References/DevContext.md` only ever documented one
+comparison in depth (Maintainerr, tried and retired 2026-07-26) - nothing in
+this repo or the workspace had checked PrunArr, Reclaimerr, Janitorr,
+Cleanuparr, or any other similarly-named *arr-adjacent cleanup tool.
+
+Researched about a dozen comparable and adjacent tools (Maintainerr, reaper,
+Reclaimerr, PrunArr, Deleterr, Purgeomatic, OCDarr, Plexorcist,
+sonarr-plex-cleaner, Prunerr, Plex-Cleaner, Usharr, Cleanarr) plus five
+ruled-out-on-purpose near misses that turned out to solve a different
+problem (Janitorr - not watch-status-driven; Cleanuparr - a download-queue
+cleaner, not a library one, despite the name collision with PrunArr;
+Sortarr - read-only; Watcharr/Wizarr/Recyclarr - unrelated domains).
+Full comparison table and reasoning in `docs/ALTERNATIVES.md`.
+
+**Verdict: keep building.** No project found confirms both of Broomarr's
+load-bearing invariants at once - true Sonarr-side per-episode enumeration
+(most ask the media server instead, the exact gap this repo exists to
+close) and never auto-deleting (almost everything else does, after a grace
+period). `reaper` (scythe-labs) is the closest philosophical match - an
+explicit, type-enforced "unknown never condemns" principle and deletion
+off-by-default - but it's pre-release and doesn't confirm per-episode
+enumeration either way. Worth revisiting if it ships a tagged release.
+
 ## 2026-08-21 - First real hand-run, and a reviewable dry-run report
 
 Confirmed by reading the source, not the README, that Broomarr already had
