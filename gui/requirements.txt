@@ -1,0 +1,5 @@
+# Only gui/ may depend on anything beyond the standard library - see
+# docs/design/gui-design.md "The stack decision". src/broomarr.py and
+# src/reclaim.py stay stdlib-only forever; tests/test_no_gui_dependency.py
+# checks that directly.
+nicegui>=2.0

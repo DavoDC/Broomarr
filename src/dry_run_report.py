@@ -102,6 +102,7 @@ def evaluate(lib):
         last_ts = users[watcher]["last"] if watcher else None
 
         item = {
+            "id": series.get("id"),
             "title": series["title"],
             "tvdb_id": series.get("tvdbId"),
             "size_gb": _gb(series),
