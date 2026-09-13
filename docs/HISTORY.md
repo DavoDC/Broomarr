@@ -2,6 +2,56 @@
 
 ---
 
+## 2026-09-14 - Source-level audit of the landscape: the "only tool that asks Sonarr" claim was false
+
+The re-scan below was written from README and documentation claims. This pass
+cloned the seven credible candidates (Maintainerr, reaper, Reclaimerr, PrunArr,
+Deleterr, Purgeomatic, OCDarr) into `NOT_MY_REPOS/`, read the actual
+watched-status and deletion logic, resolved every "Not stated" cell, and then
+re-audited that enrichment against the clones a second time. Findings and the
+revised reasoning are in `docs/ALTERNATIVES.md`.
+
+**The correction that mattered: two other tools already read Sonarr's episode
+list as ground truth.** reaper's `_final_episodes()` builds its denominator from
+Sonarr's `/episode` response on `hasFile` and its docstring rejects
+`episodeCount` and `totalEpisodeCount` by name, for the same reasons
+`docs/References/DevContext.md` gives. Reclaimerr uses
+`season.sonarr_episode_numbers` as the denominator, commented "Sonarr's
+canonical episode inventory is the denominator." The verdict below asserted
+that no project does this. It was wrong, and the enrichment pass had already
+gathered the evidence without noticing it contradicted the conclusion sitting
+beside it.
+
+What survives is narrower: Broomarr's differentiator is the **set difference**,
+not the fact that it asks Sonarr. reaper compares two high-water marks (highest
+watched vs highest on disk) and catches mid-season gaps with a separate,
+operator-disableable `protect_incomplete` gate; Reclaimerr matches per episode
+number then reduces to counts at the boundary. Broomarr names the survivors of
+`on_disk_eps - watched_eps`. One increment stronger than the field, not a
+different category.
+
+**Deleterr is genuinely unsafe** and is now named as such:
+`find_watched_data()` returns `None` indistinguishably for an unreachable
+Tautulli, an empty activity set, a failed GUID match, and a show nobody
+watched, so an empty fetch makes a whole library deletable under a common
+configuration. Skip-on-unknown in its purest form.
+
+**The "Auto-deletes?" column was replaced** with "Wrong-call cost (reversal
+window)." The old column scored Purgeomatic (cron, whole-series delete on one
+aggregate timestamp, no undo) and reaper (dry-run default, off until armed,
+canary delete, arm re-read per item, grace countdown) identically at "Yes,"
+which hid the only difference that matters. Reasoning in `docs/ALTERNATIVES.md`.
+
+**Verdict: keep building Broomarr - but the reasons are now practical, not
+architectural.** AGPL-3.0 vs MIT; reaper's rigour is inseparable from its stack
+(database, 31 migrations, scan pipeline, React front end) so there is nothing
+to harvest piecemeal; and the two tools solve different-sized problems. reaper
+is the first tool in this survey not disqualified on the merits, and the open
+action is to run it in dry-run mode against the real library before the next
+planning round. Opened as a backlog item, along with opt-in auto-delete as a
+future option - see `docs/IDEAS.md`. `CLAUDE.md` and `README.md` invariants
+unchanged: Broomarr does not delete today.
+
 ## 2026-09-14 - Competitive landscape re-scan: keep building
 
 Before movie support, the GUI, or anything else got more investment, checked

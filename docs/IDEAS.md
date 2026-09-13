@@ -8,8 +8,12 @@ Single source of truth for all pending work in this repo. Settled decisions and 
 
 Movie support is the next real piece of work. The first hand-run against the
 real library is done - see `docs/HISTORY.md` (2026-08-21). The competitive
-landscape re-scan is also done - see `docs/HISTORY.md` (2026-09-14) and
-`docs/ALTERNATIVES.md` - verdict: keep building.
+landscape re-scan and its source-level audit are also done - see
+`docs/HISTORY.md` (both 2026-09-14 entries) and `docs/ALTERNATIVES.md`.
+Verdict: keep building, but the reasons are practical (licence, stack weight,
+problem size) rather than architectural - two other tools do read Sonarr's
+episode list, and Broomarr's remaining technical claim is the set difference
+specifically, not the data source.
 
 ---
 
@@ -19,15 +23,33 @@ landscape re-scan is also done - see `docs/HISTORY.md` (2026-09-14) and
 
 ---
 
-**HIGHEST PRIORITY - blocking, do first: audit and enrich `docs/ALTERNATIVES.md`, resolve every "Not stated" cell against real source, and re-open the auto-delete question.** Two things prompted this: (1) `docs/ALTERNATIVES.md` was written from README/doc claims only - several tools' rows say "Not stated" for enumeration and unknown-handling because their public docs don't say, not because the code was checked; (2) the comparison table implicitly treats "auto-deletes" as a strike against a tool, on the assumption that a wrong deletion is costly - worth re-examining given that this media is easily re-downloadable, which changes the actual cost of a wrong auto-delete. Plan, in order:
+**Run reaper in dry-run mode against the real library, once, before the next planning round.** The source audit (`docs/ALTERNATIVES.md`, `docs/HISTORY.md` 2026-09-14) found that reaper is the first tool in the survey not disqualified on architecture: it reads Sonarr's episode list as its denominator, rejects `episodeCount`/`totalEpisodeCount` for Broomarr's own reasons, and its unknown-handling is enforced by the type system. The case for maintaining Broomarr now rests partly on an assumption nobody has tested - that reaper's shortlist would be worse than Broomarr's. It ships with `dry_run` on by default plus a host-level environment variable that must be set before any mutating call, so a read-only trial costs nothing but setup time. Run it, compare its shortlist against Broomarr's on the same library, and record the result here. If it is as good, the honest conclusion is that Broomarr's remaining value is exactness and legibility, not capability - which is a fine reason to keep it, but a different one from the reason currently written down.
 
-1. Clone the still-active alternatives plus `reaper` into `C:\Users\David\GitHubRepos\NOT_MY_REPOS` (Maintainerr, Reclaimerr, PrunArr, Deleterr, Purgeomatic, OCDarr, reaper - skip the low-activity/archived/abandoned ones, they're not credible fork candidates).
-2. Read each clone's actual watched-status/deletion logic and replace every "Not stated" cell in the comparison table with a real, source-checked answer.
-3. Only then re-judge: is "auto-deletes" still the right thing to penalize a tool for, given re-downloadable media lowers the cost of a wrong call? Should Broomarr itself gain an opt-in auto-delete mode once it's proven reliable against a real library for a while? This is a real option now, not ruled out by default - but it changes the "never deletes anything itself" invariant in `CLAUDE.md` and `README.md`, so it needs to land as its own deliberate decision, not a quiet edit alongside the doc enrichment.
-4. Is `reaper` (closest philosophical match, but pre-release and does not confirm per-episode enumeration in its docs) worth forking instead of continuing to build Broomarr from scratch, once its actual code is checked?
-5. Are "true per-episode enumeration" and "unknown blocks" still the right columns to be comparing on, or does the redownloadable-media framing change which properties actually matter?
+---
 
-Findings and any revised verdict go into `docs/ALTERNATIVES.md` itself (and `docs/HISTORY.md` once settled) - this entry is the task only.
+**Audit `episode_facts()` for the empty-vs-unreadable collapse.** Small, safety-relevant, and prompted by reaper's handling of the same problem. reaper keeps an `episodes_read` flag beside its episode map and types the map `Mapping | None` specifically so an empty map from a failed Sonarr call cannot impersonate a show with no episodes ("a missing episode map is `None`, never `{}`"). Broomarr's verdict is a set difference, `on_disk_eps - watched_eps`, and an empty `on_disk_eps` yields an empty difference - which reads as "nothing unwatched on disk," which is a *pass*. That is a fail-open hiding inside a fail-closed design. `verdict()` does append a block reason on an exception reading the episode list, so the live path is probably fine; the point is that "probably" is the wrong standard for this class of defect and there should be a test asserting that an empty or unreadable episode list blocks rather than passes. Check every path that can produce an empty `on_disk_eps`, not just the exception one.
+
+---
+
+**Surface the incomplete-series protection as a named reason in `explain()`.** reaper shows an operator "episodes are missing" as an explicit protection reason rather than leaving it implicit in the outcome. Broomarr has the same fact and the better version of it (enumerated, not counted) but does not always say so in as many words. Cheap, and it is the kind of thing that makes a shortlist trustworthy to read.
+
+---
+
+**FUTURE OPTION, NOT A DECISION: opt-in auto-delete, armed only after a demonstrated reliability bar.** This is recorded as a proposal under consideration. Broomarr does not delete today and `CLAUDE.md` and `README.md` are accurate as written; nothing here changes them. **If this is ever built, updating the "Broomarr never deletes" invariant in both files is part of the work, not an afterthought** - and the argument in `docs/References/DevContext.md` ("Why it cannot delete") would need answering explicitly rather than quietly superseded.
+
+The case for opening it: the media is re-downloadable, so the cost of a wrong deletion is usually bandwidth and inconvenience rather than loss, and the manual step is the main friction in actually using the tool. The case against a blanket flip: re-downloadability is not uniform (out-of-print, unusual cuts, anything personal), a wrong deletion is typically noticed weeks later by the person who wanted to watch it, and a *systematic* fault removes fifty shows rather than one, which is expensive even at a low per-item cost. See `docs/ALTERNATIVES.md`, "Are these the right axes?", for the full reasoning.
+
+That shape of risk points at a narrow, staged design rather than a `--delete` flag:
+
+- **Soft delete, never hard.** The armed path unmonitors the series in Sonarr and moves its files to a holding location, or flags them for removal on a timer. Actual deletion happens after a hold long enough for someone to notice - a month, not a day. Nothing is armed that cannot be undone by moving files back.
+- **Arm per scope, never globally.** A tag, a specific set of titles, or a single library at a time. The protected-media exclusion list below is a hard prerequisite, not a companion feature - there must be no way to arm before exclusions exist.
+- **Caps that abort rather than truncate.** A run that exceeds N items or M bytes stops entirely and reports, rather than deleting the first N. Truncating lets sort order pick the victims.
+- **Canary first.** Smallest item, alone, verified, before anything else in the run proceeds. A broken path mapping then costs one file. (This and the previous two are reaper's design, borrowed deliberately - see `docs/ALTERNATIVES.md`.)
+- **Two independent switches.** An in-config arm flag and a host-level environment variable, so no single bug or bad config can arm the tool.
+
+"Proven reliable enough to arm" should mean something checkable, not a feeling. A defensible bar: **thirty consecutive days of scheduled dry runs whose shortlists were reviewed, with zero entries a human rejected**, plus a persisted record of each run so the streak is evidence rather than recollection. One rejection resets the count. The streak should be per-scope, since a tool that is reliable on one library has demonstrated nothing about another. Note that this bar is itself a feature to build - run logging and shortlist-diffing between runs - and it is worth building regardless of whether auto-delete ever follows, because a shortlist that changes between runs for no reason is a bug nobody would currently see.
+
+Ordering: this comes after movie support, after the protected-media exclusion list, and after the web UI's confirm flow has been used in anger for a while. The confirm flow is the better answer to the same friction and it costs no invariant; auto-delete is only worth considering if that turns out not to be enough.
 
 ---
 
