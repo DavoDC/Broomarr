@@ -6,7 +6,13 @@ Architecture rationale (why Sonarr not Plex, why Maintainerr was retired) lives 
 
 ## Invariants
 
-**Broomarr never deletes.** No `--delete` flag, no write call to any API, no filesystem access. If a request would add one, say no and explain why - `docs/References/DevContext.md` has the argument. This is the property the whole safety case rests on.
+**Nothing deletes without a human confirming it twice, days apart.** Deletion lives in `src/reclaim.py` and nowhere else. `src/broomarr.py` is still read-only: no `--delete` flag, no non-GET request, no filesystem access, and it never imports `reclaim`. The decision engine and the write engine are separate modules on purpose, because Maintainerr's third failing was that rule evaluation and deletion were one system.
+
+**No schedule, no daemon, no timer ever reaches a delete call.** A flagged item sits in a hold queue for `hold_days`; the hold elapsing only makes it *offerable*, and a person must then confirm again, by typing, against a freshly recomputed verdict. If nobody opens the GUI, nothing is ever deleted. "An unrun script deletes nothing" still holds, and it is still why this is safe to rely on.
+
+**Seven interlocks guard the execute path** (`src/reclaim.py`): scan freshness, hold elapsed, live re-verification, caps that abort rather than truncate, a canary delete of the smallest item first, a per-item re-read before each call, and a record written after each individual deletion rather than at the end of the run. Removing or weakening any of them is the change to refuse. `docs/design/reclaim-backend-design.md` section 4 states what each one protects against; an interlock whose purpose nobody can state is one somebody will delete as redundant.
+
+**`verdict()` still cannot express "delete."** It returns candidates and reasons, exactly as before, and nothing downstream of it acts without a human. Every rule below about unknowns and counts applies unchanged, and matters more now than it did when the output was only ever printed.
 
 **An unknown value blocks.** Every branch in `verdict()` that cannot establish a fact must append a reason. Adding a code path where a failure results in a pass is the one defect class that matters here. Skip-on-unknown is what made the predecessor tool unsafe. An empty or unreadable episode list blocks too - a literal `[]` from Sonarr is a failure to answer, not a series with no episodes, and `episode_facts()` raises `UnreadableFacts` on it rather than letting three falsy checks no-op into a pass.
 
@@ -20,8 +26,11 @@ Architecture rationale (why Sonarr not Plex, why Maintainerr was retired) lives 
 python -m pytest tests -q          run the suite
 python src/broomarr.py --all       scan the library (needs live Sonarr + Tautulli)
 python src/broomarr.py "Title"     explain one show
+python -m gui.main                 GUI, localhost only - scripts/run-gui.bat wraps this
 ```
 
 ## Layout
 
-`src/broomarr.py` is the whole tool - standard library only, no dependencies, Python 3.8+. `Library` (TV) and `MovieLibrary` (movies) both take an injectable `fetch` and `now`, and both build on a shared `_ServiceClient` base (Tautulli client, `matches_watcher()`) so the two sides cannot drift; tests never hit the network. The movie join is `_movie_key()` - `(title.lower(), year)`, never title alone - and two Radarr entries sharing a key both block, since `verdict()` cannot tell them apart. `tests/test_verdict.py` and `tests/test_movie_verdict.py` are mostly deletions that must not happen. New safety behaviour gets a test first.
+`src/broomarr.py` is the decision engine and `src/reclaim.py` is the write path: both standard library only, no dependencies, Python 3.8+, both unit-testable with an injectable `fetch` and `now` and no network. The CLI must keep working on a bare Python install with no `pip install` step, forever. `gui/` is the interactive interface and is the only part of the repo permitted a dependency (NiceGUI); it contains no safety logic, and `tests/test_no_gui_dependency.py` asserts that neither core module imports it.
+
+`Library` (TV) and `MovieLibrary` (movies) both take an injectable `fetch` and `now`, and both build on a shared `_ServiceClient` base (Tautulli client, `matches_watcher()`) so the two sides cannot drift; tests never hit the network. The movie join is `_movie_key()` - `(title.lower(), year)`, never title alone - and two Radarr entries sharing a key both block, since `verdict()` cannot tell them apart. `tests/test_verdict.py` and `tests/test_movie_verdict.py` are mostly deletions that must not happen. New safety behaviour gets a test first.

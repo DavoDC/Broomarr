@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-09-14 - The GUI, and telling the safety story straight
+
+Fourth and fifth steps of the build brief in `docs/design/build-brief.md`,
+following the reclaim path. Added `gui/`, a NiceGUI interface, and rewrote
+`CLAUDE.md`, `README.md` and `docs/References/DevContext.md` to describe
+what the tool can now do rather than keep repeating "Broomarr never
+deletes," which stopped being true the moment `src/reclaim.py` existed.
+
+The dependency boundary from `docs/design/gui-design.md` is drawn at the
+directory level, and `tests/test_no_gui_dependency.py` checks it directly
+rather than trusting a comment: `src/broomarr.py` and `src/reclaim.py` stay
+standard-library-only forever (one test greps both files for the string
+"nicegui"; another imports both in a subprocess with a `sys.meta_path`
+finder that refuses to import nicegui at all, standing in for "nicegui is
+not installed" without a second virtualenv), while `gui/` is the one place
+in the repo allowed to depend on anything. `gui/main.py` binds
+`host="localhost"`, never `0.0.0.0`, which the fourth test checks by
+reading the source file directly.
+
+`gui/data.py` decides nothing new. Every safe/blocked split and every
+reason string it shows is `Library.verdict()` or `MovieLibrary.verdict()`,
+unchanged; the module only calls those, caches one scan to
+`state/last-scan.json` so the GUI never scans on launch, and adds
+`_gather_movies()` as the movie-side equivalent of the existing
+`dry_run_report.evaluate()`. Flagging an item from a review tab writes only
+to the local hold-queue file - never a request to Sonarr or Radarr. The
+six tabs are grouped by mutate-versus-observe: Dashboard, TV Shows, Movies
+and Blocked can flag; Hold Queue and History are the only tabs whose code
+path can reach `reclaim.execute()`, and Hold Queue renders two physically
+separate lists (ON HOLD, READY TO REMOVE) rather than one list with a
+disabled button, so an item still on hold has no execute control to
+misclick.
+
+Along the way, `dry_run_report.evaluate()`'s per-item dict gained an `id`
+key: it already carried `tvdb_id`, but `reclaim.execute()` matches Sonarr
+records by Sonarr's own internal series id, which is a different number.
+
+One deliberate scope trim against the full visual spec, disclosed rather
+than silently dropped: the grid/table view toggle, poster proxying and its
+`state/covers/` cache, the amber close-call band keyed to
+`MARGIN_DAYS_RISKY`, and tabular-numeral typography are not built. Nothing
+that decides, holds, or removes anything is affected - only how it looks.
+
+The documentation rewrite applies section 5 of
+`docs/design/reclaim-backend-design.md` close to verbatim, with two
+corrections where the drafted text no longer matched the repo: the README
+line "Broomarr holds no state... and writes to none of them" was already
+false (the reclaim path keeps `state/`), so the Scope section now says so
+directly instead of repeating a guarantee the code had dropped; and
+`DevContext.md`'s "no automation, no deletion" line in the Maintainerr
+comparison became "no automation, and no deletion that a person did not
+confirm twice." Everything else - the seven-interlock list, the "what is
+genuinely worse than before" paragraph, and the "there are no runs nobody
+watched" argument - is applied as drafted, because that paragraph is the
+one this whole rewrite exists to keep honest.
+
+Smoke-tested live: `python -m gui.main` starts against the real
+`config/config.json` in this environment and serves on
+`http://localhost:8472`; `netstat` confirms it listens only on
+`127.0.0.1:8472` and `[::1]:8472`, never `0.0.0.0`. The acceptance
+criterion's hand-test - flag one small real item, watch it sit in the
+hold, confirm the execute control is absent, then cancel it, without
+executing a real deletion - is recorded separately once it has actually
+been run against the live library.
+
 ## 2026-09-14 - Movie support: Radarr joins Sonarr and Tautulli
 
 Second step of the build brief in `docs/design/build-brief.md`, following the

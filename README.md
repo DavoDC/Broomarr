@@ -33,9 +33,15 @@ A movie is a simpler version of the same idea, since there is no season or episo
 
 Together these are why Broomarr asks Sonarr rather than the media server. Plex, Jellyfin and Emby can only tell you about episodes that were downloaded, so a half-fetched series reports as fully watched the moment somebody finishes a later season. Sonarr knows the real episode list. `docs/References/DevContext.md` makes the full argument, including a fair account of why [Maintainerr](https://github.com/jorenn92/Maintainerr) was used first and then replaced.
 
-## Broomarr never deletes anything
+## Broomarr never deletes on its own
 
-No `--delete` flag, no write call to any API, no filesystem access. This is not a feature waiting to be added - it is the property everything else rests on. A tool that can delete has to be right on every run, including the ones nobody watched. A tool that prints a list has to be right only while somebody is reading it, with the reasoning in front of them.
+There is no schedule, no daemon and no timer that can delete anything. Nothing is ever removed by a run nobody watched, because there are no runs nobody watched: if you do not open Broomarr, nothing happens.
+
+What it can do, since you asked for it in the interface, is carry out a removal **you confirm twice, days apart**. You flag a candidate; it sits in a hold queue for a week; when the hold elapses Broomarr recomputes the whole verdict against live data, tells you if anything changed while it waited, and only then offers you a confirmation you have to type. Cancelling is one click at any point, and it never asks you to confirm the cancel.
+
+Around that sit seven interlocks: it refuses to act on a stale scan, it re-verifies every item against live Sonarr, Radarr and Tautulli at the moment of execution, it aborts rather than truncates when a run exceeds its caps, it deletes the smallest item first and checks that it worked before touching anything else, it re-reads each item immediately before removing it, and it writes the record after each removal rather than at the end. A tool that deletes needs to be right on every run; this one only ever runs while you are watching it, and it spends that run trying to talk you out of it.
+
+The decision engine cannot delete. `src/broomarr.py` makes no write call to anything and holds no `--delete` flag; the removal path is a separate module (`src/reclaim.py`) you have to deliberately reach through the GUI's Hold Queue tab. The part that decides is not the part that acts, and that is enforced by the code rather than promised by this paragraph.
 
 ## Setup
 
@@ -75,6 +81,14 @@ python src/broomarr.py "Some Show"        explain one show in full
 
 On Windows, `scripts\run.bat` prompts for the mode and keeps the window open.
 
+For the GUI - Dashboard, TV Shows, Movies, Blocked, and the Hold Queue where a flagged item can actually be removed after its hold elapses - run:
+
+```
+python -m gui.main
+```
+
+or `scripts\run-gui.bat` on Windows. It binds to `localhost` only and opens at `http://localhost:8472`. It never scans on launch; press Re-scan on the Dashboard once it is open.
+
 The single-show form prints what Sonarr holds, which episodes were never downloaded, who watched how many and when, and every reason the show is or is not a candidate. Reach for it whenever you disagree with the scan - it is the same six conditions, shown working.
 
 ## Tests
@@ -87,9 +101,11 @@ The suite is mostly deletions that must not happen, including regression fixture
 
 ## Scope
 
-TV and movies. Broomarr holds no state, reads from Sonarr, Radarr and Tautulli and writes to none of them, so it sits alongside whatever else manages your library.
+TV and movies. The movie join is a simpler version of the same idea: Radarr has no episodes, so one film either has a file or does not, and the join is on title and year rather than a per-episode set. Radarr is optional - a config without it is a valid TV-only install.
 
-**Status:** Active development. TV and movie support are both complete; a reviewable hold-and-confirm reclaim flow and a GUI are next.
+The decision engine (`src/broomarr.py`) still reads from Sonarr, Radarr and Tautulli and writes to none of them. The optional reclaim path (`src/reclaim.py`, reached through the GUI) keeps its own local state under `state/` (gitignored - a hold queue and a removal history) and, only after two confirmations days apart, deletes through the same APIs Sonarr's and Radarr's own UIs use.
+
+**Status:** Active development. TV and movie support, a local web interface, and a confirm-then-hold removal flow.
 
 ## Licence
 

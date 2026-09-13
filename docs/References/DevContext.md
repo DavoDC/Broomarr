@@ -63,12 +63,24 @@ What made this concrete: a review of eight shows Maintainerr had queued for dele
 
 **None of this is fixable by writing better rules,** which is the important part and the reason for a separate tool rather than a better configuration. The information needed - the real episode list, independent of what was downloaded - is not available to a tool that asks the media server. Sonarr has it. That makes it a data-source problem, and no rule expressed against the wrong data source can recover it.
 
-If your library is fully downloaded and you want automated deletion, Maintainerr is the more capable tool by a wide margin, and it has a UI. Broomarr is narrower on purpose: partial libraries, one decision, no automation, no deletion.
+If your library is fully downloaded and you want automated deletion, Maintainerr is the more capable tool by a wide margin, and it has a UI. Broomarr is narrower on purpose: partial libraries, one decision, no automation, and no deletion that a person did not confirm twice.
 
-## Why it cannot delete
+## Why it could not delete, and what changed
 
-Broomarr makes no write calls and touches no files. It is not a limitation to be lifted later - it is the property that makes the rest tolerable.
+This section previously argued that Broomarr must never delete. The argument was this: a tool with the power to delete has to be right every time it runs, including runs nobody watched, runs after a service outage, and runs after a config change somebody made six weeks ago, whereas a tool that only prints a list has to be right only in the moment somebody reads the list and acts on it, with the full reasoning in front of them. The second bar is achievable; the first is not, for a decision this asymmetric.
 
-A tool with the power to delete has to be right every time it runs, including runs nobody watched, runs after a service outage, and runs after a config change somebody made six weeks ago. A tool that only prints a list has to be right only in the moment somebody reads the list and acts on it, with the full reasoning in front of them. The second bar is achievable; the first is not, for a decision this asymmetric.
+That argument is still correct, and it is worth reading it as an argument about **unattended execution** rather than about deletion as such. Its load-bearing phrase is "every time it runs, including runs nobody watched." A tool that acts on its own schedule accumulates runs nobody read, so its correctness bar becomes the union of every state the system could be in across all of them. That bar is the one that cannot be cleared.
 
-Deletion stays a deliberate manual action in Sonarr. That is the design, not a milestone.
+Broomarr now has a removal path, and it is built to stay on the achievable side of that line rather than to argue the line away.
+
+**There are no runs nobody watched.** No scheduler, no daemon, no cron entry, no background thread, no timer can reach a delete call. The only automatic transition in the reclaim state machine moves an item from "cannot be executed" to "may be offered," and the offer is made to a person looking at the screen. If nobody opens the application, nothing happens, indefinitely. "An unrun script deletes nothing" is preserved exactly.
+
+**The algorithm never decides.** `verdict()` produces candidates and reasons, unchanged. A person selects from them twice, days apart, with the evidence rendered both times, and the interface is built so that rejecting a candidate is cheaper than accepting one at every step. The proposal is the algorithm's; the decision is the person's.
+
+**The outage and stale-config cases are answered by the same rule that already answered them.** An unreachable service blocks in `verdict()` and additionally aborts the execute path. A scan older than a few days cannot be executed against at all, and every item is re-verified against live data at the moment of removal, so a stale configuration cannot carry a stale decision through to a file.
+
+**The asymmetry is answered, not denied.** "Deleted and should not have been" and "kept and should not have been" remain unequal outcomes. The response is a reversal window of days during which cancelling costs one click, caps that abort rather than truncate, and a canary delete that makes a systematic fault cost one item rather than fifty.
+
+**What is genuinely worse than before, stated plainly.** The old guarantee was absolute and cost nothing to state. The new one is conditional and depends on seven interlocks continuing to work, which means it depends on nobody removing one as redundant. `CLAUDE.md` names them and `docs/design/reclaim-backend-design.md` states what each protects against, for that reason. What justifies the trade is that the manual step was the main friction in actually using the tool, an unused safety tool protects nothing, and the person confirming knows what they watched better than any heuristic does. That is a judgment rather than a proof, and pretending otherwise would be the more dangerous document.
+
+**What has not changed:** unknown still blocks, no decision is ever made from a count, and `src/broomarr.py` still contains no write call of any kind. The decision engine and the write engine are separate modules, which is the specific thing Maintainerr does not do and the third reason it was retired.
