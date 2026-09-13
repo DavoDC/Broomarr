@@ -31,7 +31,7 @@ asserting a partially-watched show can never land in `safe_items`.
 
 Ran `--check` then the new report against the real library (197 series,
 Sonarr and Tautulli both live on localhost). 18 series survived the cheap
-prefilter, 3 came back safe (Gracepoint, Chernobyl, Fawlty Towers - 53 GB),
+prefilter, 3 came back safe (53 GB across the three),
 15 blocked, all on real evidence (unwatched episodes on disk, or aired
 episodes never downloaded). Full report in `captures/dry-run-report-*.txt`
 (gitignored, local only).
