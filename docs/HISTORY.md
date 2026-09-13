@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-09-14 - The empty-versus-unreadable collapse fixed on the TV side
+
+Fixed the fail-open `docs/design/reclaim-backend-design.md` section 2 diagnosed:
+a literal `[]` from Sonarr's `/api/v3/episode` made `episode_facts()` return
+`([], [], set())` without raising, so `verdict()`'s three downstream checks
+(missing, upcoming, unwatched) were all falsy and a show read as safe on the
+strength of a response that established nothing. Three independent changes,
+any one of which alone would have prevented it: `episode_facts()` now raises
+a new `UnreadableFacts` when the response is `None`, not a list, or an empty
+list, each with its own message; `verdict()`'s deep branch explicitly checks
+`on_disk_eps is None` (belt-and-braces - not reachable today, but the contract
+stays self-documenting) separately from an empty-but-established
+`on_disk_eps`, which now also blocks with "no episodes with files found on
+disk, nothing to verify against"; and `explain()` and
+`dry_run_report.evaluate()` were both updated for the same `None` case.
+Landed first, ahead of movie support and the reclaim path, because the same
+pass attaches a delete button to `verdict()`'s output and shipping that over
+a known fail-open in the function feeding it would have been indefensible.
+
+---
+
 ## 2026-09-14 - Source-level audit of the landscape: the "only tool that asks Sonarr" claim was false
 
 The re-scan below was written from README and documentation claims. This pass

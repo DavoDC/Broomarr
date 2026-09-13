@@ -380,6 +380,46 @@ def test_verdict_uses_the_same_matching_rule_as_matches_watcher():
     assert safe, reasons
 
 
+def test_empty_episode_list_blocks_rather_than_passes():
+    """Sonarr returning a literal [] must not read as "nothing missing."
+
+    Before the fix, an empty episode list made all three verdict checks
+    (missing, upcoming, unwatched) no-op false, and the show passed on the
+    strength of a response that established nothing. This test fails on the
+    current code - confirm that before fixing.
+    """
+    lib = library([])
+    safe, reasons = lib.verdict(series(), watchers(6, season=1))
+    assert not safe
+    assert any("episode" in r.lower() for r in reasons)
+
+
+def test_null_episode_response_blocks():
+    lib = library(None)
+    safe, reasons = lib.verdict(series(), watchers(6, season=1))
+    assert not safe
+    assert any("episode" in r.lower() for r in reasons)
+
+
+def test_non_list_episode_response_blocks():
+    lib = library({"error": "not found"})
+    safe, reasons = lib.verdict(series(), watchers(6, season=1))
+    assert not safe
+    assert any("episode" in r.lower() for r in reasons)
+
+
+def test_all_episodes_unaired_blocks_on_empty_on_disk():
+    """A real list whose episodes all lie in the future - on_disk_eps is
+    legitimately empty, not unreadable. Must still block, on the upcoming
+    reason and on the empty-on-disk reason both."""
+    episodes = [episode(1, n, has_file=False, aired=False) for n in range(1, 7)]
+    lib = library(episodes)
+    safe, reasons = lib.verdict(series(), watchers(6, season=1))
+    assert not safe
+    assert any("not yet aired" in r for r in reasons)
+    assert any("nothing to verify against" in r for r in reasons)
+
+
 def test_check_passes_when_watcher_matches_a_friendly_name(capsys):
     lib = checked_library([series()], [history_row(user="Watcher")])
     ok = broomarr.check(lib)

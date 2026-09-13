@@ -80,6 +80,16 @@ SERVICE_ERRORS = (urllib.error.URLError, urllib.error.HTTPError, OSError,
                   ValueError, KeyError)
 
 
+class UnreadableFacts(Exception):
+    """Raised by episode_facts()/movie_facts() when a response establishes
+    nothing about the real state of a series or movie - None, the wrong
+    shape, or (for episodes) a real series that came back with zero
+    episodes. Distinct from "the show genuinely has none": a real Sonarr
+    series always has at least one episode record, so an empty list is a
+    failure to answer, not an answer. See docs/References/DevContext.md.
+    """
+
+
 def _wrap_service_error(service, base_url, exc):
     """Turn a low-level connection/parsing failure into a message a human
     can act on: which service, the configured base URL (never an API key -
@@ -174,13 +184,33 @@ class Library:
 
         Returns (missing, upcoming, on_disk_eps): aired but not downloaded,
         not yet aired, and the (season, episode) identifiers of every
-        aired episode that has a file. Counting from the episode list
-        rather than from the series statistics avoids two separate traps -
-        see docs/References/DevContext.md.
+        aired episode that has a file - or None for on_disk_eps on any path
+        that did not establish it. Counting from the episode list rather
+        than from the series statistics avoids two separate traps - see
+        docs/References/DevContext.md.
+
+        Raises UnreadableFacts if the response cannot be trusted at all:
+        None, not a list, or a real Sonarr series answering with zero
+        episodes. This is a membership/type test, not a truthiness test,
+        so the three cases stay distinguishable in the message even though
+        all three block.
         """
         now = self.now()
+        response = self.sonarr("/api/v3/episode?seriesId=%s" % series_id)
+        if response is None:
+            raise UnreadableFacts(
+                "Sonarr returned no response for series %s's episode list"
+                % series_id)
+        if not isinstance(response, list):
+            raise UnreadableFacts(
+                "Sonarr returned a %s, not a list, for series %s's episode "
+                "list" % (type(response).__name__, series_id))
+        if len(response) == 0:
+            raise UnreadableFacts(
+                "Sonarr returned no episodes for series %s, which is not "
+                "a fact about the series" % series_id)
         missing, upcoming, on_disk_eps = [], [], set()
-        for episode in self.sonarr("/api/v3/episode?seriesId=%s" % series_id):
+        for episode in response:
             season = episode.get("seasonNumber", 0)
             if season == 0:
                 continue
@@ -252,13 +282,26 @@ class Library:
                                   + (" ..." if len(missing) > 6 else "")))
             if upcoming:
                 reasons.append("%d episode(s) not yet aired" % len(upcoming))
-            unwatched = sorted(on_disk_eps - users[watcher]["eps"])
-            if unwatched:
-                labels = ["S%02dE%02d" % (s, e) for s, e in unwatched]
-                reasons.append(
-                    "%s never watched %d episode(s) on disk: %s"
-                    % (self.watcher, len(unwatched), ", ".join(labels[:6])
-                       + (" ..." if len(labels) > 6 else "")))
+            if on_disk_eps is None:
+                # Belt-and-braces: episode_facts() raises before returning
+                # None today, so this path is not reachable, but the check
+                # stays so the contract is self-documenting at the one call
+                # site that matters most - a reader sees this and knows
+                # emptiness and unreadability are different things here.
+                reasons.append("could not establish which episodes are on "
+                               "disk")
+            elif not on_disk_eps:
+                reasons.append("no episodes with files found on disk, "
+                               "nothing to verify against.")
+            else:
+                unwatched = sorted(on_disk_eps - users[watcher]["eps"])
+                if unwatched:
+                    labels = ["S%02dE%02d" % (s, e) for s, e in unwatched]
+                    reasons.append(
+                        "%s never watched %d episode(s) on disk: %s"
+                        % (self.watcher, len(unwatched),
+                           ", ".join(labels[:6])
+                           + (" ..." if len(labels) > 6 else "")))
         # else (deep=False): the cheap prefilter in scan() deliberately
         # skips all of the above rather than approximating it with a
         # count. It is only safe because it is *structurally* a weaker
@@ -311,10 +354,15 @@ def explain(lib, series, users):
           % (stats["episodeFileCount"], stats["episodeCount"]))
     print("  size on disk      : %.1f GB" % (stats["sizeOnDisk"] / 1e9))
     try:
-        missing, upcoming, _ = lib.episode_facts(series["id"])
+        missing, upcoming, on_disk_eps = lib.episode_facts(series["id"])
         print("  never downloaded  : %s"
               % (", ".join(missing) if missing else "none"))
         print("  not yet aired     : %d" % len(upcoming))
+        if on_disk_eps is None:
+            print("  on disk           : UNAVAILABLE - could not establish "
+                  "which episodes have files")
+        elif not on_disk_eps:
+            print("  on disk           : none - nothing to verify against")
     except Exception as exc:
         print("  episode list      : UNAVAILABLE (%s)" % exc)
     print()

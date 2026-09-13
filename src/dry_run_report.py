@@ -85,7 +85,7 @@ def evaluate(lib):
     for series, users in candidates:
         ok, reasons = lib.verdict(series, users)
 
-        missing, upcoming, on_disk_eps = [], [], set()
+        missing, upcoming, on_disk_eps = [], [], None
         try:
             missing, upcoming, on_disk_eps = lib.episode_facts(series["id"])
         except Exception:
@@ -93,7 +93,12 @@ def evaluate(lib):
 
         watcher = next((n for n in users if lib.matches_watcher(n)), None)
         watched_eps = users[watcher]["eps"] if watcher else set()
-        unwatched = sorted(on_disk_eps - watched_eps)
+        # on_disk_eps is None when episode_facts() could not establish it
+        # (the try/except above) - treat that the same as "nothing on disk
+        # to verify against" here, since the difference is already a
+        # blocking reason on lib.verdict()'s side and this dict only
+        # renders evidence, never decides.
+        unwatched = sorted((on_disk_eps or set()) - watched_eps)
         last_ts = users[watcher]["last"] if watcher else None
 
         item = {
@@ -107,7 +112,7 @@ def evaluate(lib):
                 datetime.datetime.fromtimestamp(last_ts).strftime("%Y-%m-%d")
                 if last_ts else None),
             "quiet_margin_days": _quiet_margin_days(lib, users, watcher),
-            "episodes_on_disk": len(on_disk_eps),
+            "episodes_on_disk": len(on_disk_eps) if on_disk_eps is not None else None,
             "episodes_watched": len(watched_eps),
             "missing_episodes": missing,
             "upcoming_episodes": upcoming,
