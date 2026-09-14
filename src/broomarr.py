@@ -135,7 +135,8 @@ def _movie_key(obj):
     return (title.strip().lower(), year)
 
 
-MovieFacts = collections.namedtuple("MovieFacts", ["on_disk", "released"])
+MovieFacts = collections.namedtuple("MovieFacts",
+                                    ["on_disk", "released", "status"])
 
 
 def _wrap_service_error(service, base_url, exc):
@@ -448,13 +449,21 @@ class MovieLibrary(_ServiceClient):
         if match is None:
             return None
         return MovieFacts(on_disk=bool(match.get("hasFile")),
-                          released=(match.get("status") == "released"))
+                          released=(match.get("status") == "released"),
+                          status=match.get("status"))
 
     def verdict(self, movie, users):
         """Is this movie safe to delete? Returns (safe, [reasons it is not]).
 
         Unknown blocks, same as Library.verdict() - every path that
         cannot establish a fact returns a reason rather than passing.
+
+        hasFile and status are read through movie_facts() - Radarr's own
+        current bulk list, looked up by id - rather than off whatever
+        fields happen to be on the movie dict the caller passed in. A
+        caller can be holding a stale in-memory copy (a cached scan, a
+        GUI tab open a while); trusting it directly would risk calling a
+        since-deleted-on-disk file safe.
         """
         reasons = []
 
@@ -468,10 +477,16 @@ class MovieLibrary(_ServiceClient):
             reasons.append("another movie in Radarr and this one share "
                            "this title and year - cannot tell them apart")
 
-        if not movie.get("hasFile"):
+        facts = self.movie_facts(movie.get("id"))
+        if facts is None:
+            reasons.append("could not find this movie in Radarr's current "
+                           "list")
+            return False, reasons
+
+        if not facts.on_disk:
             reasons.append("no file on disk")
 
-        status = movie.get("status")
+        status = facts.status
         if status == "released":
             pass
         elif status in RECOGNISED_MOVIE_STATUSES:

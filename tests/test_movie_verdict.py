@@ -202,6 +202,36 @@ def test_movie_facts_returns_none_not_empty_for_a_missing_id():
     assert facts.released is True
 
 
+def test_verdict_trusts_the_live_radarr_record_not_a_stale_caller_copy():
+    """verdict() must read hasFile/status through movie_facts() - the
+    same lookup against Radarr's current bulk list that movie_facts()
+    already does - rather than off whatever fields happen to be on the
+    movie dict the caller passed in. Here the caller's copy still says
+    hasFile=True, but Radarr's live list (queried by id) now says
+    hasFile=False: the live record must win, or a scan holding a stale
+    in-memory copy could call a since-deleted-on-disk file safe.
+    """
+    live_movie = movie(id=1, has_file=False)
+    stale_caller_copy = movie(id=1, has_file=True)
+    lib = movie_library([live_movie], [movie_history_row(stopped=LONG_AGO)])
+    safe, reasons = lib.verdict(stale_caller_copy, {"Watcher": {
+        "watched": True, "last": LONG_AGO}})
+    assert not safe
+    assert any("file" in r.lower() for r in reasons)
+
+
+def test_verdict_blocks_when_the_movie_is_no_longer_in_radarrs_list():
+    """Unknown blocks: if the id cannot be found in Radarr's current
+    bulk list at all, that is not "assume the caller's copy is still
+    good" - it is a fact Broomarr cannot establish, so it blocks.
+    """
+    lib = movie_library([movie(id=2)], [movie_history_row(stopped=LONG_AGO)])
+    safe, reasons = lib.verdict(movie(id=1), {"Watcher": {
+        "watched": True, "last": LONG_AGO}})
+    assert not safe
+    assert any("could not find" in r.lower() for r in reasons)
+
+
 def test_movie_config_requires_both_radarr_keys_together(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(
