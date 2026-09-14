@@ -87,7 +87,25 @@ For the GUI - Dashboard, TV Shows, Movies, Blocked, and the Hold Queue where a f
 python -m gui.main
 ```
 
-or `scripts\run-gui.bat` on Windows. It binds to `localhost` only and opens at `http://localhost:8472`. It never scans on launch; press Re-scan on the Dashboard once it is open.
+or `scripts\run-gui.bat` on Windows. It binds to `127.0.0.1` only by default and opens at `http://localhost:8472`. It never scans on launch; press Re-scan on the Dashboard once it is open.
+
+### Giving someone else access
+
+By default the GUI has no login at all, since it only ever listens on `127.0.0.1` - nothing outside your own machine can reach it. If you plan to make it reachable beyond that (for example through a private tunnel to one specific other person), set these in `config/config.json` first:
+
+| Field | What it does |
+|---|---|
+| `gui_users` | A map of username to `{"password_hash": ..., "role": "admin" or "viewer"}`. Leave empty or omit it to keep the GUI login-free. |
+| `gui_storage_secret` | A long random string used to sign the session cookie. Required once `gui_users` is non-empty. |
+| `gui_host`, `gui_port` | Where the GUI listens. Default to `127.0.0.1:8472`. Never set `gui_host` to `0.0.0.0` - that exposes it to your whole local network, not just the one path in you intended. |
+
+Generate a password hash rather than typing a plaintext password into config.json:
+
+```
+python scripts/set-gui-password.py
+```
+
+It prompts for a password (never echoed, never written to any log) and prints a `gui_users` snippet to paste in. A `viewer` account can see everything but cannot flag, cancel or remove anything, at the point each of those actions runs, not only in which buttons the page happens to show. `scripts/check-auth-enforced.py` sends unauthenticated requests at a running GUI and confirms every route redirects to `/login` or refuses instead of serving app content.
 
 The single-show form prints what Sonarr holds, which episodes were never downloaded, who watched how many and when, and every reason the show is or is not a candidate. Reach for it whenever you disagree with the scan - it is the same six conditions, shown working.
 

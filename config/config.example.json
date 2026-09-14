@@ -16,5 +16,11 @@
   "hold_days": 7,
   "max_scan_age_days": 3,
   "max_items": 10,
-  "max_bytes": 250000000000
+  "max_bytes": 250000000000,
+
+  "_comment_gui_auth": "Optional - leave gui_users empty (or remove it) to keep the GUI exactly as it has always been: no login, reachable only from the configured host. Only set these before exposing the GUI beyond your own machine, for example through a private tunnel to one other person. Generate a password hash with 'python scripts/set-gui-password.py', never type a plaintext password directly into this file. gui_storage_secret is a long random string used to sign the session cookie - required once gui_users is non-empty. gui_host/gui_port default to 127.0.0.1:8472 if omitted; never set gui_host to 0.0.0.0, which would expose the GUI to your whole local network instead of just the intended path in.",
+  "gui_users": {},
+  "gui_storage_secret": "PUT_A_LONG_RANDOM_STRING_HERE",
+  "gui_host": "127.0.0.1",
+  "gui_port": 8472
 }
