@@ -161,6 +161,27 @@ class Data:
         with open(config.HISTORY_PATH, encoding="utf-8") as fh:
             return json.load(fh)
 
+    def record_removal_actor(self, item_ids, username):
+        """Stamp "removed_by" onto the history records for the given item
+        ids - called right after a successful reclaim.execute() so an
+        attributed history stays a GUI-layer concern, not something
+        src/reclaim.py (stdlib-only, no notion of accounts) has to know
+        about. Only fills in records that don't already have one, so this
+        is safe to call even if it somehow ran twice for the same ids.
+        """
+        if not item_ids or not os.path.exists(config.HISTORY_PATH):
+            return
+        with open(config.HISTORY_PATH, encoding="utf-8") as fh:
+            history = json.load(fh)
+        id_set = set(item_ids)
+        changed = False
+        for record in history:
+            if record.get("item_id") in id_set and "removed_by" not in record:
+                record["removed_by"] = username
+                changed = True
+        if changed:
+            _atomic_write_json(config.HISTORY_PATH, history)
+
     def flag(self, kind, item):
         """Flag one item for the hold queue. Writes only to the local
         queue file - never a request to any service. The evidence snapshot

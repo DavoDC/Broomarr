@@ -17,12 +17,20 @@ only ever runs from the explicit Re-scan button.
 from __future__ import annotations
 
 import datetime
+import threading
 
-from nicegui import ui
+from nicegui import app, ui
+from nicegui import run as nicegui_run
 
-from gui import config, data
+from gui import auth, config, data
 
 STORE = data.Data()
+
+# Guards the execute path specifically: a second do_execute() invocation
+# must not be able to proceed while one is already running against the
+# same queue - see docs/IDEAS.md item 5 and the re-entrancy audit finding
+# it references.
+_execute_lock = threading.Lock()
 
 NAV_GROUPS = [
     ("REVIEW", ["dashboard", "tv", "movies", "blocked"]),
@@ -68,12 +76,25 @@ def _build_dashboard(container):
             if age_days is not None and age_days > 3:
                 age_label.style("color:%s" % AMBER_COLOR)
 
-            def do_rescan():
-                STORE.run_scan()
-                ui.notify("Scan complete.")
+            rescan_button = ui.button("Re-scan")
+
+            async def do_rescan():
+                # Offloaded to a thread and the button shows its own
+                # loading spinner for the duration - a full library scan
+                # can take minutes, and run synchronously on the click
+                # handler that used to block the event loop for every
+                # connected client. See docs/IDEAS.md item 5.
+                rescan_button.set_enabled(False)
+                rescan_button.props("loading")
+                try:
+                    await nicegui_run.io_bound(STORE.run_scan)
+                    ui.notify("Scan complete.")
+                finally:
+                    rescan_button.props(remove="loading")
+                    rescan_button.set_enabled(True)
                 build_active_tab()
 
-            ui.button("Re-scan", on_click=do_rescan)
+            rescan_button.on_click(do_rescan)
 
         if not scan:
             with ui.column().style(_card_style()):
@@ -112,17 +133,26 @@ def _build_dashboard(container):
         ui.label("SERVICE HEALTH").classes("text-sm font-bold").style(
             "margin-top:16px;color:#999;")
 
-        def do_check():
+        health_button = ui.button("Run health check").props("outline")
+        health = ui.column().classes("w-full")
+
+        async def do_check():
+            health_button.set_enabled(False)
+            health_button.props("loading")
+            try:
+                results = await nicegui_run.io_bound(STORE.check_health)
+            finally:
+                health_button.props(remove="loading")
+                health_button.set_enabled(True)
             health.clear()
             with health:
-                for name, ok, detail in STORE.check_health():
+                for name, ok, detail in results:
                     with ui.row().classes("items-center"):
                         ui.html(_badge("OK", SAFE_COLOR) if ok
                                else _badge("FAIL", RED_COLOR))
                         ui.label("%s - %s" % (name, detail))
 
-        ui.button("Run health check", on_click=do_check).props("outline")
-        health = ui.column().classes("w-full")
+        health_button.on_click(do_check)
 
         ui.label("IN HOLD").classes("text-sm font-bold").style(
             "margin-top:16px;color:#999;")
@@ -156,6 +186,11 @@ def _build_review_table(container, kind, safe_items, blocked_items,
             "Show blocked items too", value=show_all_state[0])
 
         def on_flag(kind_, item_):
+            try:
+                auth.require_admin()
+            except PermissionError as exc:
+                ui.notify(str(exc), type="negative")
+                return
             item_id = STORE.flag(kind_, item_)
             ui.notify("Flagged %r for the hold queue (item %s)."
                       % (item_["title"], item_id))
@@ -203,11 +238,14 @@ def _build_review_table(container, kind, safe_items, blocked_items,
                             if item["id"] in flagged_ids:
                                 ui.button("Already flagged").props(
                                     "disable")
-                            else:
+                            elif auth.is_admin():
                                 ui.button(
                                     "Flag for removal",
                                     on_click=lambda _, i=item: on_flag(
                                         kind, i))
+                            # A viewer sees the same evidence with no
+                            # flag control at all - see docs/IDEAS.md
+                            # item 4.
 
         show_all.on_value_change(lambda _: render_rows())
         render_rows()
@@ -266,6 +304,15 @@ def _build_hold(container):
                 "by a timer. When the hold elapses you confirm a second "
                 "time, or cancel.").style("color:#999;")
 
+        # Read-only rendering for a viewer role: the same two lists, the
+        # same evidence, no Cancel and no remove/confirm controls at all
+        # - see docs/IDEAS.md item 4. can_mutate is True whenever auth is
+        # off entirely, so a single-user localhost install is unaffected.
+        can_mutate = auth.is_admin()
+        if not can_mutate:
+            ui.label("View-only - this account cannot cancel or remove "
+                    "anything.").style("color:#999;font-style:italic;")
+
         queue = STORE.queue()
         cfg = STORE.ensure_libraries()
         hold_days = cfg.get("hold_days", reclaim_defaults_hold_days())
@@ -294,13 +341,19 @@ def _build_hold(container):
                             if False else
                             "hold ends in ~%d day(s)" % (remaining))
 
-                def do_cancel(i=item_id):
-                    queue.cancel(i)
-                    ui.notify("Cancelled.")
-                    build_active_tab()
+                if can_mutate:
+                    def do_cancel(i=item_id):
+                        try:
+                            auth.require_admin()
+                        except PermissionError as exc:
+                            ui.notify(str(exc), type="negative")
+                            return
+                        queue.cancel(i)
+                        ui.notify("Cancelled.")
+                        build_active_tab()
 
-                ui.button("Cancel", on_click=do_cancel).props(
-                    "outline color=grey")
+                    ui.button("Cancel", on_click=do_cancel).props(
+                        "outline color=grey")
 
         ui.label("READY TO REMOVE").classes("text-sm font-bold").style(
             "margin-top:16px;color:#999;")
@@ -314,13 +367,19 @@ def _build_hold(container):
                                               record["size_bytes"] / 1e9))
                     ui.label("hold elapsed").style("color:#999;font-size:12px;")
 
-                def do_cancel(i=item_id):
-                    queue.cancel(i)
-                    ui.notify("Cancelled.")
-                    build_active_tab()
+                if can_mutate:
+                    def do_cancel(i=item_id):
+                        try:
+                            auth.require_admin()
+                        except PermissionError as exc:
+                            ui.notify(str(exc), type="negative")
+                            return
+                        queue.cancel(i)
+                        ui.notify("Cancelled.")
+                        build_active_tab()
 
-                ui.button("Cancel", on_click=do_cancel).props(
-                    "outline color=grey")
+                    ui.button("Cancel", on_click=do_cancel).props(
+                        "outline color=grey")
 
         if due:
             scan_age = STORE.scan_age_days()
@@ -330,53 +389,108 @@ def _build_hold(container):
                 total_bytes = sum(r["size_bytes"] for _, r in due)
                 ui.label("%d item(s), %.1f GB." % (len(due),
                                                    total_bytes / 1e9))
-                if scan_age is not None and scan_age > max_scan_age:
+                if not can_mutate:
+                    pass  # viewer sees the summary only, per item 4.
+                elif scan_age is not None and scan_age > max_scan_age:
                     ui.label("Scan is stale - re-scan from the Dashboard "
                             "before removing anything.").style(
                         "color:%s;" % AMBER_COLOR)
                 else:
-                    confirm_input = ui.input(
-                        placeholder="Type REMOVE to enable")
+                    # Accessibility fix (docs/IDEAS.md item 6): a
+                    # persistent visible label rather than a placeholder
+                    # that vanishes on the first keystroke, .strip()-
+                    # tolerant matching so a trailing space does not
+                    # silently no-op, and an explicit message on a
+                    # mismatch instead of a button that just stays
+                    # disabled with no explanation.
+                    ui.label("Type REMOVE (exact, case-sensitive) to "
+                            "enable removal:").style(
+                        "font-size:12px;color:#ccc;")
+                    confirm_input = ui.input().props(
+                        'aria-label="Type REMOVE to enable removal" '
+                        'autofocus')
+                    mismatch_label = ui.label("").style(
+                        "color:%s;font-size:12px;min-height:16px;"
+                        % AMBER_COLOR)
                     remove_button = ui.button("Remove %d item(s)"
                                              % len(due))
                     remove_button.props("color=red")
                     remove_button.set_enabled(False)
 
                     def check_confirm(e):
-                        remove_button.set_enabled(
-                            confirm_input.value == "REMOVE")
+                        typed = (confirm_input.value or "").strip()
+                        if typed == "REMOVE":
+                            remove_button.set_enabled(True)
+                            mismatch_label.text = ""
+                        else:
+                            remove_button.set_enabled(False)
+                            mismatch_label.text = (
+                                "" if not typed else
+                                "Type REMOVE exactly (case-sensitive - "
+                                "leading/trailing spaces are ignored) to "
+                                "enable the button.")
 
                     confirm_input.on_value_change(check_confirm)
 
-                    def do_execute():
-                        import reclaim
-                        # Re-read the queue from disk right now, rather
-                        # than trusting `queue` above (bound when this tab
-                        # was rendered) - another open tab may have
-                        # cancelled one of these items in the meantime,
-                        # and a stale in-memory Queue must never be the
-                        # thing that decides an item is still executable.
-                        fresh_queue = STORE.queue()
-                        still_due = [
-                            i for i, _ in due
-                            if fresh_queue.items.get(i, {}).get("state")
-                            == "PENDING"
-                            and fresh_queue.is_due(i, hold_days)]
-                        if not still_due:
-                            ui.notify("Nothing left to remove - it may "
-                                     "have been cancelled elsewhere.",
-                                     type="warning")
-                            build_active_tab()
-                            return
+                    async def do_execute():
                         try:
-                            result = reclaim.execute(
-                                STORE.lib, STORE.movie_lib, fresh_queue,
-                                still_due, cfg)
-                            ui.notify("Removed %d item(s)."
-                                     % len(result["removed"]))
-                        except reclaim.ReclaimError as exc:
-                            ui.notify("Run aborted: %s" % exc, type="negative")
-                        build_active_tab()
+                            auth.require_admin()
+                        except PermissionError as exc:
+                            ui.notify(str(exc), type="negative")
+                            return
+                        # Module-level lock (docs/IDEAS.md item 5): a
+                        # second invocation - a queued double-click, or a
+                        # second tab - must not be able to start a
+                        # concurrent reclaim.execute() run against items
+                        # the first run may already have deleted.
+                        if not _execute_lock.acquire(blocking=False):
+                            ui.notify(
+                                "A removal is already running - please "
+                                "wait for it to finish.", type="warning")
+                            return
+                        remove_button.set_enabled(False)
+                        remove_button.props("loading")
+                        try:
+                            import reclaim
+                            # Re-read the queue from disk right now,
+                            # rather than trusting `queue` above (bound
+                            # when this tab was rendered) - another open
+                            # tab may have cancelled one of these items in
+                            # the meantime, and a stale in-memory Queue
+                            # must never be the thing that decides an
+                            # item is still executable.
+                            fresh_queue = STORE.queue()
+                            still_due = [
+                                i for i, _ in due
+                                if fresh_queue.items.get(i, {}).get("state")
+                                == "PENDING"
+                                and fresh_queue.is_due(i, hold_days)]
+                            if not still_due:
+                                ui.notify(
+                                    "Nothing left to remove - it may "
+                                    "have been cancelled elsewhere.",
+                                    type="warning")
+                                return
+                            try:
+                                # Offloaded to a thread so the delete
+                                # calls (network I/O to Sonarr/Radarr)
+                                # never block the event loop for every
+                                # connected client - see item 5.
+                                result = await nicegui_run.io_bound(
+                                    reclaim.execute, STORE.lib,
+                                    STORE.movie_lib, fresh_queue,
+                                    still_due, cfg)
+                                STORE.record_removal_actor(
+                                    result["removed"],
+                                    auth.username_for_record())
+                                ui.notify("Removed %d item(s)."
+                                         % len(result["removed"]))
+                            except reclaim.ReclaimError as exc:
+                                ui.notify("Run aborted: %s" % exc,
+                                         type="negative")
+                        finally:
+                            _execute_lock.release()
+                            build_active_tab()
 
                     remove_button.on_click(do_execute)
 
@@ -398,10 +512,14 @@ def _build_history(container):
         for record in sorted(history, key=lambda r: -r.get("removed_at", 0)):
             when = datetime.datetime.fromtimestamp(
                 record.get("removed_at", 0)).strftime("%Y-%m-%d %H:%M")
+            line = "%s   %.1f GB   removed %s" % (
+                record["title"], record["size_bytes"] / 1e9, when)
+            # Attribution recorded at execute time - docs/IDEAS.md item 4.
+            # Absent on any record written before this field existed.
+            if record.get("removed_by"):
+                line += "   by %s" % record["removed_by"]
             with ui.column().style(_card_style()).classes("w-full"):
-                ui.label("%s   %.1f GB   removed %s"
-                        % (record["title"], record["size_bytes"] / 1e9,
-                           when))
+                ui.label(line)
 
 
 BUILDERS = {
@@ -428,6 +546,12 @@ def build_active_tab():
 @ui.page("/")
 def index():
     ui.dark_mode().enable()
+    # Visible focus rings everywhere - the accessibility finding in
+    # docs/IDEAS.md item 6 was not limited to the destructive confirm,
+    # and this is the cheap global fix for all of it.
+    ui.add_head_html(
+        "<style>*:focus-visible{outline:2px solid #4caf50 !important;"
+        "outline-offset:2px;}</style>")
 
     with ui.row().classes("w-full no-wrap").style("gap:0;align-items:stretch;"):
         with ui.column().style(
@@ -438,6 +562,21 @@ def index():
             age_days = STORE.scan_age_days()
             ui.label(data.format_age(age_days)).style(
                 "padding:0 16px;color:#999;font-size:12px;")
+
+            if auth.is_enabled():
+                user = auth.current_user()
+                if user is not None:
+                    with ui.row().classes("items-center justify-between"
+                                          ).style("padding:4px 16px;"):
+                        ui.label("%s (%s)" % (user["name"], user["role"])
+                                ).style("color:#999;font-size:11px;")
+
+                        def do_logout():
+                            auth.log_out()
+                            ui.navigate.to("/login")
+
+                        ui.button("Log out", on_click=do_logout).props(
+                            "flat dense size=sm")
 
             main_area = {"container": None}
 
@@ -470,9 +609,37 @@ def index():
 
 
 def run():
-    ui.run(title="Broomarr", host="localhost", port=config.PORT,
-          reload=False, favicon="\U0001F9F9", dark=True,
-          show=False)
+    # A missing or invalid config.json must not stop the GUI from
+    # starting at all - the Dashboard's cached-scan view has always
+    # worked without one, and every tab that actually needs config
+    # already calls STORE.ensure_libraries() itself and fails there
+    # instead. gui_host/gui_port/gui_storage_secret/gui_users all default
+    # to "off" behaviour in that case.
+    try:
+        cfg = STORE.ensure_libraries()
+    except SystemExit:
+        cfg = {}
+
+    host = config.gui_host(cfg)
+    port = config.gui_port(cfg)
+    storage_secret = cfg.get("gui_storage_secret")
+
+    if auth.is_enabled(cfg):
+        if not storage_secret:
+            raise SystemExit(
+                "config.json defines gui_users but no gui_storage_secret "
+                "- generate a long random string for gui_storage_secret "
+                "before enabling login.")
+        # Registered before ui.run() so NiceGUI's own SessionMiddleware
+        # and request-tracking middleware (added inside ui.run() below)
+        # end up outermost and have already prepared the session by the
+        # time this one runs - see gui/auth.py's RequireLoginMiddleware
+        # docstring for why the order matters.
+        app.add_middleware(auth.RequireLoginMiddleware)
+
+    ui.run(title="Broomarr", host=host, port=port,
+          storage_secret=storage_secret, reload=False,
+          favicon="\U0001F9F9", dark=True, show=False)
 
 
 if __name__ in {"__main__", "__mp_main__"}:
