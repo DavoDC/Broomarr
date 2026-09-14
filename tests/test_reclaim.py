@@ -436,6 +436,109 @@ def test_interlock_6_refuses_a_record_already_gone_before_delete(tmp_path):
     assert queue.items[item_id]["state"] == "PENDING"
 
 
+def test_reverify_refuses_a_tvdb_id_mismatch_and_aborts_the_whole_run(
+        tmp_path):
+    """The evidence captured at flag time names tvdb id 555; live Sonarr
+    now answers the same Sonarr series id with a different tvdb id - as
+    if the id had been reused (a database restore, a remove-and-re-add).
+    Must abort the whole run with a ReclaimError naming the mismatch,
+    not just quietly return this one item to PENDING the way an ordinary
+    re-verify failure does.
+    """
+    series_list = [dict(series_row(id=1, title="A Show"), tvdbId=999)]
+    episodes = {1: [episode(1, 1)]}
+    history = [history_row(season=1, ep=1)]
+    later = NOW + datetime.timedelta(days=8)
+    lib, movie_lib = make_libs(later, series_list=series_list,
+                               episodes_by_id=episodes, history_rows=history)
+
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    flagging_queue = reclaim.Queue(q_path, h_path, now=NOW)
+    evidence = make_evidence(scanned_at=later.timestamp())
+    evidence["tvdb_id"] = 555  # different from the live series' tvdbId
+    item_id = flagging_queue.flag("tv", 1, "A Show", 100, evidence)
+    queue = reclaim.Queue(q_path, h_path, now=later)
+
+    def request(*a, **k):
+        raise AssertionError("must not delete on an identity mismatch")
+
+    with pytest.raises(reclaim.ReclaimError, match="tvdb"):
+        reclaim.execute(lib, movie_lib, queue, [item_id], CONFIG,
+                        request=request)
+    assert queue.items[item_id]["state"] == "PENDING"
+
+
+def test_reverify_refuses_a_movie_title_year_mismatch(tmp_path):
+    """Same identity check on the movie side: the evidence names "A Film"
+    (2020); the live Radarr movie at this id is now "Different Film"
+    (1999) - the id was reused. Must abort with ReclaimError.
+    """
+    movies_list = [movie_row(id=1, title="Different Film", year=1999)]
+    movie_history = [movie_history_row(title="Different Film", year=1999)]
+    later = NOW + datetime.timedelta(days=8)
+    lib, movie_lib = make_libs(later, movies_list=movies_list,
+                               movie_history_rows=movie_history)
+
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    flagging_queue = reclaim.Queue(q_path, h_path, now=NOW)
+    evidence = make_evidence(scanned_at=later.timestamp())
+    evidence["title"] = "A Film"
+    evidence["year"] = 2020
+    item_id = flagging_queue.flag("movie", 1, "A Film", 100, evidence)
+    queue = reclaim.Queue(q_path, h_path, now=later)
+
+    def request(*a, **k):
+        raise AssertionError("must not delete on an identity mismatch")
+
+    with pytest.raises(reclaim.ReclaimError, match="title"):
+        reclaim.execute(lib, movie_lib, queue, [item_id], CONFIG,
+                        request=request)
+    assert queue.items[item_id]["state"] == "PENDING"
+
+
+def test_interlock_6_refuses_an_identity_mismatch_immediately_before_delete(
+        tmp_path):
+    """Interlock 3's bulk re-verify passes - the id and tvdb id still
+    agree at that moment - but the per-item re-read immediately before
+    the delete call (interlock 6) finds the same Sonarr id now pointing
+    at a different tvdb id. Must abort rather than delete under the
+    wrong identity.
+    """
+    later = NOW + datetime.timedelta(days=8)
+
+    def fetch(url, headers=None):
+        if url.startswith("http://sonarr/api/v3/episode?seriesId="):
+            return [episode(1, 1)]
+        if url == "http://sonarr/api/v3/series/1":
+            return dict(series_row(id=1, title="A Show"), tvdbId=999)
+        if url.startswith("http://sonarr/api/v3/series"):
+            return [dict(series_row(id=1, title="A Show"), tvdbId=555)]
+        if "media_type=episode" in url:
+            return {"response": {"data":
+                                 {"data": [history_row(season=1, ep=1)]}}}
+        raise ValueError("unexpected url in test fetch: %s" % url)
+
+    lib = broomarr.Library(CONFIG, fetch=fetch, now=later)
+    movie_lib = broomarr.MovieLibrary(CONFIG, fetch=fetch, now=later)
+
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    flagging_queue = reclaim.Queue(q_path, h_path, now=NOW)
+    evidence = make_evidence(scanned_at=later.timestamp())
+    evidence["tvdb_id"] = 555
+    item_id = flagging_queue.flag("tv", 1, "A Show", 100, evidence)
+    queue = reclaim.Queue(q_path, h_path, now=later)
+
+    def request(*a, **k):
+        raise AssertionError("must not delete on an identity mismatch")
+
+    with pytest.raises(reclaim.ReclaimError, match="tvdb"):
+        reclaim.execute(lib, movie_lib, queue, [item_id], CONFIG,
+                        request=request)
+
+
 def test_delete_url_is_exactly_right(tmp_path):
     series_list = [series_row(id=1, title="A Show", size_bytes=100)]
     episodes = {1: [episode(1, 1)]}

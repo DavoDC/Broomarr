@@ -231,16 +231,63 @@ def _fetch_single(lib, movie_lib, record):
             % (record["title"], service, exc)) from exc
 
 
+def _identity_mismatch(record, live):
+    """None if the live Sonarr/Radarr record's identity still matches
+    what was flagged, otherwise a string naming the mismatch. Guards
+    against a service id being reused - a database restore, a
+    remove-and-re-add - which would otherwise resolve a week-old flag to
+    a different title entirely while every existing interlock (all of
+    which key purely on service_id) passes it through unchanged.
+
+    TV compares tvdbId; movies compare (title, year) - the same two
+    identities the rest of the repo already treats as the real key
+    (_movie_key(), and tvdbId in explain()/dry_run_report). Only compares
+    when both sides actually have a value - older evidence or a record
+    missing the field skips the check rather than false-alarming on an
+    absence that was never a claim of identity in the first place.
+    """
+    evidence = record["evidence"]
+    if record["kind"] == "tv":
+        flagged_tvdb = evidence.get("tvdb_id")
+        live_tvdb = live.get("tvdbId")
+        if (flagged_tvdb is not None and live_tvdb is not None
+                and flagged_tvdb != live_tvdb):
+            return ("tvdb id changed from %r to %r since this was flagged "
+                    "- this Sonarr id no longer refers to the same show"
+                    % (flagged_tvdb, live_tvdb))
+        return None
+    flagged_title = evidence.get("title")
+    flagged_year = evidence.get("year")
+    live_title = live.get("title")
+    live_year = live.get("year")
+    if (flagged_title is not None and flagged_year is not None
+            and live_title is not None and live_year is not None
+            and (flagged_title, flagged_year) != (live_title, live_year)):
+        return ("title/year changed from %r (%s) to %r (%s) since this "
+                "was flagged - this Radarr id no longer refers to the "
+                "same film"
+                % (flagged_title, flagged_year, live_title, live_year))
+    return None
+
+
 def _reverify(lib, movie_lib, record):
     """Re-run verdict() against live Sonarr/Radarr and Tautulli data right
     now, from scratch - the whole reason the hold exists is that this can
     disagree with the evidence captured at flag time. See interlock 3.
+
+    Raises ReclaimError (rather than returning False, [reason]) on an
+    identity mismatch - this is not "the show became unsafe," which the
+    ordinary return-to-PENDING path exists for, but "this id no longer
+    means what the human confirmed," which aborts the whole run.
     """
     if record["kind"] == "tv":
         series = next((s for s in lib.series()
                        if s["id"] == record["service_id"]), None)
         if series is None:
             return False, ["no longer found in Sonarr"]
+        mismatch = _identity_mismatch(record, series)
+        if mismatch:
+            raise ReclaimError("refusing %r: %s" % (record["title"], mismatch))
         index = lib.watch_index()
         users = index.get(series["title"].lower(), {})
         return lib.verdict(series, users)
@@ -248,6 +295,9 @@ def _reverify(lib, movie_lib, record):
                  if m["id"] == record["service_id"]), None)
     if movie is None:
         return False, ["no longer found in Radarr"]
+    mismatch = _identity_mismatch(record, movie)
+    if mismatch:
+        raise ReclaimError("refusing %r: %s" % (record["title"], mismatch))
     index = movie_lib.movie_watch_index()
     key = broomarr._movie_key(movie)
     users = index.get(key, {}) if key is not None else {}
@@ -311,6 +361,11 @@ def execute(lib, movie_lib, queue, item_ids, cfg, request=http_request):
         record = queue.items[item_id]
         try:
             safe, reasons = _reverify(lib, movie_lib, record)
+        except ReclaimError:
+            # An identity mismatch, not an ordinary re-verify failure -
+            # abort the whole run rather than quietly returning this one
+            # item to PENDING. See _identity_mismatch().
+            raise
         except Exception as exc:
             safe, reasons = False, ["could not re-verify live: %s" % exc]
         if safe:
@@ -346,6 +401,9 @@ def execute(lib, movie_lib, queue, item_ids, cfg, request=http_request):
             raise ReclaimError(
                 "refusing %r: no longer found immediately before delete"
                 % record["title"])
+        mismatch = _identity_mismatch(record, current)
+        if mismatch:
+            raise ReclaimError("refusing %r: %s" % (record["title"], mismatch))
 
         url, headers = _delete_url_and_headers(cfg, record)
         try:
