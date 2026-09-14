@@ -13,6 +13,7 @@ anywhere, that reaches a delete call without a human calling execute().
 
 import datetime
 import json
+import urllib.error
 
 import pytest
 
@@ -337,6 +338,102 @@ def test_a_failed_canary_stops_the_run(tmp_path):
     assert len(request.calls) == 1
     assert queue.items[ids[0]]["state"] == "PENDING"
     assert queue.items[ids[1]]["state"] == "PENDING"
+
+
+def _live_shaped_single_fetch(series_list, episodes_by_id, history_rows,
+                              removed_ids):
+    """A fetch() whose single-item Sonarr lookup fails the way the real
+    service does: a 404 raised as urllib.error.HTTPError, never a bare
+    None. build_fetch()'s removed_ids is a fiction no live service
+    produces - this is the shape _fetch_single() actually has to survive.
+    """
+    def fetch(url, headers=None):
+        if url.startswith("http://sonarr/api/v3/episode?seriesId="):
+            sid = int(url.rsplit("=", 1)[1])
+            return episodes_by_id.get(sid, [])
+        if url.startswith("http://sonarr/api/v3/series/"):
+            sid = int(url.rsplit("/", 1)[1])
+            if sid in removed_ids:
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+            return next((s for s in series_list if s["id"] == sid), None)
+        if url.startswith("http://sonarr/api/v3/series"):
+            return series_list
+        if "media_type=episode" in url:
+            return {"response": {"data": {"data": history_rows}}}
+        raise ValueError("unexpected url in test fetch: %s" % url)
+    return fetch
+
+
+def test_canary_reverify_survives_a_real_404_after_successful_delete(tmp_path):
+    """Reproduces the live bug directly: the canary delete succeeds, then
+    the canary re-verification's single-item GET gets back a real 404
+    (HTTPError), not the build_fetch() fiction of a bare None. Before the
+    fix, _fetch_single() let that HTTPError propagate as an uncaught
+    OSError, so execute() never reached queue.mark_removed() even though
+    the delete had genuinely gone through - the queue stayed PENDING
+    forever and nothing was written to history.
+    """
+    series_list = [series_row(id=1, title="A Show", size_bytes=100)]
+    episodes = {1: [episode(1, 1)]}
+    history = [history_row(season=1, ep=1)]
+    later = NOW + datetime.timedelta(days=8)
+    removed_ids = set()
+
+    fetch = _live_shaped_single_fetch(series_list, episodes, history,
+                                      removed_ids)
+    lib = broomarr.Library(CONFIG, fetch=fetch, now=later)
+    movie_lib = broomarr.MovieLibrary(CONFIG, fetch=fetch, now=later)
+
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    flagging_queue = reclaim.Queue(q_path, h_path, now=NOW)
+    item_id = flagging_queue.flag(
+        "tv", 1, "A Show", 100, make_evidence(scanned_at=later.timestamp()))
+    queue = reclaim.Queue(q_path, h_path, now=later)
+    request = make_request(removed_ids=removed_ids)
+
+    result = reclaim.execute(lib, movie_lib, queue, [item_id], CONFIG,
+                             request=request)
+
+    assert result["removed"] == [item_id]
+    assert queue.items[item_id]["state"] == "REMOVED"
+    with open(h_path, encoding="utf-8") as fh:
+        recorded_history = json.load(fh)
+    assert len(recorded_history) == 1
+
+
+def test_interlock_6_refuses_a_record_already_gone_before_delete(tmp_path):
+    """Interlock 6's `if current is None:` branch, exercised for real: the
+    per-item re-read immediately before the delete call finds the record
+    already gone (a live 404), and execute() must abort with ReclaimError
+    naming the item rather than letting an HTTPError escape uncaught.
+    """
+    series_list = [series_row(id=1, title="A Show", size_bytes=100)]
+    episodes = {1: [episode(1, 1)]}
+    history = [history_row(season=1, ep=1)]
+    later = NOW + datetime.timedelta(days=8)
+    removed_ids = {1}  # already gone by the time execute() runs
+
+    fetch = _live_shaped_single_fetch(series_list, episodes, history,
+                                      removed_ids)
+    lib = broomarr.Library(CONFIG, fetch=fetch, now=later)
+    movie_lib = broomarr.MovieLibrary(CONFIG, fetch=fetch, now=later)
+
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    flagging_queue = reclaim.Queue(q_path, h_path, now=NOW)
+    item_id = flagging_queue.flag(
+        "tv", 1, "A Show", 100, make_evidence(scanned_at=later.timestamp()))
+    queue = reclaim.Queue(q_path, h_path, now=later)
+
+    def request(*a, **k):
+        raise AssertionError("must not delete when the pre-delete re-read "
+                             "found the record already gone")
+
+    with pytest.raises(reclaim.ReclaimError, match="no longer found"):
+        reclaim.execute(lib, movie_lib, queue, [item_id], CONFIG,
+                        request=request)
+    assert queue.items[item_id]["state"] == "PENDING"
 
 
 def test_delete_url_is_exactly_right(tmp_path):

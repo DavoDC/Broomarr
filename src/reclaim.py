@@ -17,6 +17,7 @@ background thread anywhere in this file.
 
 import json
 import os
+import urllib.error
 import urllib.request
 
 import broomarr
@@ -163,12 +164,41 @@ class Queue:
 def _fetch_single(lib, movie_lib, record):
     """Re-read one item's own record directly from Sonarr or Radarr - not
     the bulk list, so a delete that already happened is visible as gone
-    rather than served from a cache. Returns None if the service no
-    longer has the record (already deleted, or never existed).
+    rather than served from a cache. Returns None if the service reports
+    the record as no longer found - a 404, whether from a delete that
+    already happened or a record that never existed.
+
+    Calls lib.fetch()/movie_lib.fetch() directly rather than going
+    through Library.sonarr()/MovieLibrary.radarr(), because those wrap
+    every SERVICE_ERRORS entry (urllib.error.HTTPError included) into a
+    generic OSError via _wrap_service_error(), which throws away the
+    HTTP status code a 404 needs to be told apart from every other kind
+    of failure. Anything other than a 404 still raises - as ReclaimError,
+    never a bare OSError, so gui/main.py's do_execute() (which only
+    catches ReclaimError) can show the user something instead of nothing.
     """
     if record["kind"] == "tv":
-        return lib.sonarr("/api/v3/series/%s" % record["service_id"])
-    return movie_lib.radarr("/api/v3/movie/%s" % record["service_id"])
+        client, service = lib, "Sonarr"
+        base_url = lib.cfg["sonarr_url"]
+        url = base_url.rstrip("/") + "/api/v3/series/%s" % record["service_id"]
+        headers = {"X-Api-Key": lib.cfg["sonarr_api_key"]}
+    else:
+        client, service = movie_lib, "Radarr"
+        base_url = movie_lib.cfg["radarr_url"]
+        url = base_url.rstrip("/") + "/api/v3/movie/%s" % record["service_id"]
+        headers = {"X-Api-Key": movie_lib.cfg["radarr_api_key"]}
+    try:
+        return client.fetch(url, headers)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise ReclaimError(
+            "could not re-read %r from %s immediately before delete: %s"
+            % (record["title"], service, exc)) from exc
+    except broomarr.SERVICE_ERRORS as exc:
+        raise ReclaimError(
+            "could not re-read %r from %s immediately before delete: %s"
+            % (record["title"], service, exc)) from exc
 
 
 def _reverify(lib, movie_lib, record):
