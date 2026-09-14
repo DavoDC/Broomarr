@@ -6,24 +6,12 @@ Single source of truth for all pending work in this repo. Settled decisions and 
 
 ## Current Focus
 
-The combined build pass (movie support, the reclaim backend, the GUI, and
-the documentation rewrite) described in `docs/design/build-brief.md` is
-done - see `docs/HISTORY.md`'s 2026-09-14 entries for what was built and
-where it diverged from the design. The one gap that pass knowingly left
-open, named by its own entries at the time: **the protected-media
-exclusion list does not exist yet**, so a confirm screen with no
-exclusion support can surface a protected title as a normal candidate,
-survived only by the human reading the hold queue and the week-long hold.
-That is the next thing worth building, before the first real removal
-against the live library if practical - see "Protected-media exclusion
-list" below.
-
-The competitive landscape re-scan and its source-level audit are done - see
-`docs/HISTORY.md` (both 2026-09-14 entries) and `docs/ALTERNATIVES.md`.
-Verdict: keep building, but the reasons are practical (licence, stack weight,
-problem size) rather than architectural - two other tools do read Sonarr's
-episode list, and Broomarr's remaining technical claim is the set difference
-specifically, not the data source.
+**The protected-media exclusion list does not exist yet**, so a confirm
+screen with no exclusion support can surface a protected title as a normal
+candidate, survived only by the human reading the hold queue and the
+week-long hold. That is the next thing worth building, before the first
+real removal against the live library if practical - see "Protected-media
+exclusion list" below.
 
 ---
 
@@ -131,17 +119,9 @@ The same argument generalises beyond this repo. Anything self-written and reacha
 
 ---
 
-**[LOW] This file has completed work sitting in it, against its own stated convention.** The header says settled decisions and completed features belong in `docs/HISTORY.md`, and Current Focus opens with three paragraphs describing a build pass that is done and a landscape re-scan that is done. The protected-media exclusion gap is then stated three times over: in Current Focus, in the "This recommendation was overridden, knowingly" entry under Lower Priority, and in the "Protected-media exclusion list" entry that follows it. The overridden-recommendation entry in particular reads as a retrospective note rather than pending work. One entry describing what to build, with the history moved to `HISTORY.md`, would make the backlog readable again.
-
----
-
 ## Lower Priority / Future
 
 *(Ordered by size - smaller/quicker first. These are not urgent but worth doing eventually.)*
-
----
-
-**This recommendation was overridden, knowingly, and the gap it named is now live.** The confirm screen shipped without exclusion support: a protected title appears as a normal candidate today, and the only thing standing between it and removal is the human reading the hold queue and the week-long hold - which is, to be fair, the entire premise of the confirm flow, but the risk this entry identified is real and is only survived by the design, not mitigated by it. Build exclusions next, before the first real removal against the live library if practical - see "Current Focus" above.
 
 ---
 

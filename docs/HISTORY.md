@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-09-14 - Trimming completed narrative out of IDEAS.md
+
+`IDEAS.md`'s own audit named this against itself: the file's header says
+settled decisions and completed features belong here, but Current Focus
+opened with three paragraphs recapping a build pass and a competitive
+landscape re-scan that were both already done, and the protected-media
+exclusion gap was stated three times over (Current Focus, an "overridden
+recommendation" retrospective entry, and the "Protected-media exclusion
+list" entry itself). Current Focus now states only the one live gap; the
+retrospective entry is gone, since it added nothing "Protected-media
+exclusion list" didn't already say as pending work. The build pass and the
+landscape re-scan are recorded in this file's other 2026-09-14 entries, not
+restated in the backlog.
+
+---
+
 ## 2026-09-14 - Closing the pre-ship audit's HIGH and MEDIUM findings
 
 The architecture and UI review recorded under "Audit findings" in
