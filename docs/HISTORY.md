@@ -2,6 +2,77 @@
 
 ---
 
+## 2026-09-14 - Login-gated GUI: session auth, two roles, and the execute-path fixes it depended on
+
+Built the auth/access-control plan `docs/IDEAS.md` had recorded in full
+(Tailscale access for a friend, prerequisites before giving it out) as a
+straight implementation pass, since the plan already worked out the design
+in detail; nothing here revisits the plan's reasoning, only what shipped
+against it.
+
+New `gui/auth.py`: `hash_password()`/`verify_password()` on
+`hashlib.pbkdf2_hmac` and `hmac.compare_digest`, `check_credentials()`
+reading a `gui_users` config block (name -> password hash plus
+`"admin"`/`"viewer"` role), `current_user()`/`log_in()`/`log_out()` on
+`app.storage.user`, and a `RequireLoginMiddleware` allowlisting only
+`/login` and NiceGUI's own static/internal paths. `is_admin()`/
+`require_admin()` fail open to admin when `gui_users` is empty (no accounts
+configured means the login gate never engaged, matching today's no-auth
+behaviour on David's own machine) and fail closed to the session's real
+role once any account exists. `require_admin()` is called inside the
+handlers themselves - `on_flag()`, both cancel closures, `do_execute()` -
+not only by omitting buttons from a viewer's rendered page, per the plan's
+own reasoning that the markup and the enforcement must not be the same
+check. `username_for_record()` feeds the acting account into
+removal-history records.
+
+`gui/config.py` reads `gui_host`/`gui_port` from config (defaulting to
+`"127.0.0.1"`/`8472`) in place of the old hardcoded port constant, and
+`config/config.example.json` documents `gui_users`, `gui_storage_secret`,
+`gui_host`, `gui_port` with placeholders, plus a comment that leaving
+`gui_users` empty keeps the GUI exactly as it always behaved.
+`scripts/set-gui-password.py` prints a hash for pasting so a plaintext
+password is never typed into the config file, and
+`scripts/check-auth-enforced.py` sends unauthenticated requests at every
+route including NiceGUI's internal endpoints and asserts a redirect or 401
+from all of them - the negative test the plan called for, meant to run
+before any tailnet grant exists. `tests/test_gui_auth.py` covers hashing,
+credential checks, role gating with auth on and off, and `require_admin()`
+raising for a viewer session.
+
+Two findings from the pre-ship audit turned out to be the same work as
+steps in this plan and were fixed alongside it, not separately: the
+execute path now has a re-entrancy guard (`_execute_lock`, non-blocking
+`acquire()` before `do_execute()` runs) and every long-running handler
+(`do_rescan()`, `do_check()`, `do_execute()`) offloads to
+`nicegui_run.io_bound()` with a `"loading"` prop on its button for the
+duration, so a second click while a scan is running no longer queues a
+second run or freezes the page for other connected sessions. The
+typed-`REMOVE` confirm gained a persistent visible label (was a placeholder
+that vanished on the first keystroke), `.strip()`-tolerant matching, and an
+explicit "type REMOVE exactly" message on a mismatch instead of a button
+that just stayed disabled. Not everything the audit asked for there is
+done - the button is still a disabled control rather than a
+keyboard-reachable always-focusable one, and there are still no visible
+focus rings anywhere in the app - so that accessibility-affordances audit
+finding stays open in `docs/IDEAS.md` for that remainder.
+
+`Queue._load()` in `src/reclaim.py` already caught
+`(json.JSONDecodeError, OSError)` around its `json.load()` call by the time
+this pass started; confirmed rather than re-fixed.
+
+What is still not done, and stays in `docs/IDEAS.md` as the live remainder
+of the plan: everything outside this repo (generating the real password
+hashes, standing up `tailscale serve`, testing from a device that has
+actually left the property, adding the one port to the friend's existing
+device-tag grant) plus login-page visual polish and password-manager
+`autocomplete` attributes, which the plan always scoped as a later
+cosmetic pass.
+
+`python -m pytest tests -q`: 126 passed.
+
+---
+
 ## 2026-09-14 - Trimming completed narrative out of IDEAS.md
 
 `IDEAS.md`'s own audit named this against itself: the file's header says
