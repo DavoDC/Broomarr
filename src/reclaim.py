@@ -88,8 +88,21 @@ class Queue:
     def _load(self):
         if not os.path.exists(self.path):
             return
-        with open(self.path, encoding="utf-8") as fh:
-            data = json.load(fh)
+        try:
+            with open(self.path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (json.JSONDecodeError, OSError):
+            # A corrupt or truncated state/reclaim-queue.json must not
+            # take down every page for whoever opens it next - treat it
+            # as an empty queue rather than raising a bare traceback out
+            # of the GUI's page-build code. Never overwrites the bad file
+            # itself: the next successful flag()/cancel() only ever
+            # writes the items this instance touches (see _save()), so
+            # the corrupt bytes stay on disk for a human to inspect
+            # rather than being silently replaced.
+            self.items = {}
+            self._next_id = 1
+            return
         self.items = data.get("items", {})
         self._next_id = data.get("next_id", 1)
 
@@ -107,10 +120,20 @@ class Queue:
         """
         on_disk_items, on_disk_next_id = {}, 1
         if os.path.exists(self.path):
-            with open(self.path, encoding="utf-8") as fh:
-                on_disk = json.load(fh)
-            on_disk_items = on_disk.get("items", {})
-            on_disk_next_id = on_disk.get("next_id", 1)
+            try:
+                with open(self.path, encoding="utf-8") as fh:
+                    on_disk = json.load(fh)
+                on_disk_items = on_disk.get("items", {})
+                on_disk_next_id = on_disk.get("next_id", 1)
+            except (json.JSONDecodeError, OSError):
+                # Same corrupt-file tolerance as _load() (docs/IDEAS.md
+                # item 8): if the file on disk cannot be parsed, treat it
+                # as empty rather than letting a stale bad file block
+                # every future flag()/cancel()/mark_removed() forever.
+                # This instance's own in-memory items (self.items,
+                # self._next_id, both already validated at __init__ time)
+                # are what actually gets written below instead.
+                on_disk_items, on_disk_next_id = {}, self._next_id
 
         merged_items = dict(on_disk_items)
         for item_id in self._dirty_ids:

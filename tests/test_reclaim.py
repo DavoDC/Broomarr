@@ -757,6 +757,39 @@ def test_queue_file_write_is_atomic(tmp_path, monkeypatch):
         json.load(fh)  # must be complete, valid JSON - never a partial file
 
 
+def test_a_corrupt_queue_file_does_not_crash_load(tmp_path):
+    """docs/IDEAS.md item 8 - one bad state/reclaim-queue.json must not
+    take down every page for every viewer. Truncated/non-JSON content
+    falls back to an empty queue instead of raising out of __init__.
+    """
+    path = tmp_path / "reclaim-queue.json"
+    path.write_text("{not valid json at all", encoding="utf-8")
+    queue = reclaim.Queue(str(path), str(tmp_path / "reclaim-history.json"),
+                          now=NOW)
+    assert queue.items == {}
+
+
+def test_a_corrupt_queue_file_is_left_on_disk_not_overwritten(tmp_path):
+    """The corrupt bytes stay put for a human to inspect - _load()'s
+    fallback must not itself trigger a write.
+    """
+    path = tmp_path / "reclaim-queue.json"
+    original = "{truncated"
+    path.write_text(original, encoding="utf-8")
+    reclaim.Queue(str(path), str(tmp_path / "reclaim-history.json"), now=NOW)
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_a_queue_recovered_from_corruption_can_still_flag_normally(
+        tmp_path):
+    path = tmp_path / "reclaim-queue.json"
+    path.write_text("[]this is not the right shape either", encoding="utf-8")
+    queue = reclaim.Queue(str(path), str(tmp_path / "reclaim-history.json"),
+                          now=NOW)
+    item_id = queue.flag("tv", 1, "A Show", 1000, make_evidence())
+    assert queue.items[item_id]["title"] == "A Show"
+
+
 def test_broomarr_module_issues_no_non_get_request():
     with open(broomarr.__file__, encoding="utf-8") as fh:
         source = fh.read()
