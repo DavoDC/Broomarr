@@ -6,6 +6,8 @@ Single source of truth for all pending work in this repo. Settled decisions and 
 
 ## Current Focus
 
+**Broomarr is ready for testing against the real library, in dry-run/flag/hold/cancel mode - not for a real deletion yet.** The test suite is green. The core safety invariants (hold period, cap-abort-not-truncate, canary-first, re-verify-before-delete) are built and tested, and none of the open audit findings below block read-only or hold-queue use: the destructive-confirm and blocking-GUI-action findings are UX problems on a control that still fails safe, and the rest are cosmetic or test-coverage gaps. This is the next step before further development, and it costs nothing to do now - run scans, flag items, watch them sit in the hold queue, cancel them, and record what breaks here.
+
 **The protected-media exclusion list does not exist yet**, so a confirm
 screen with no exclusion support can surface a protected title as a normal
 candidate, survived only by the human reading the hold queue and the
