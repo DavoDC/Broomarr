@@ -334,10 +334,28 @@ def _build_hold(container):
 
                     def do_execute():
                         import reclaim
+                        # Re-read the queue from disk right now, rather
+                        # than trusting `queue` above (bound when this tab
+                        # was rendered) - another open tab may have
+                        # cancelled one of these items in the meantime,
+                        # and a stale in-memory Queue must never be the
+                        # thing that decides an item is still executable.
+                        fresh_queue = STORE.queue()
+                        still_due = [
+                            i for i, _ in due
+                            if fresh_queue.items.get(i, {}).get("state")
+                            == "PENDING"
+                            and fresh_queue.is_due(i, hold_days)]
+                        if not still_due:
+                            ui.notify("Nothing left to remove - it may "
+                                     "have been cancelled elsewhere.",
+                                     type="warning")
+                            build_active_tab()
+                            return
                         try:
                             result = reclaim.execute(
-                                STORE.lib, STORE.movie_lib, queue,
-                                [i for i, _ in due], cfg)
+                                STORE.lib, STORE.movie_lib, fresh_queue,
+                                still_due, cfg)
                             ui.notify("Removed %d item(s)."
                                      % len(result["removed"]))
                         except reclaim.ReclaimError as exc:

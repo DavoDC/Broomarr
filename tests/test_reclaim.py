@@ -518,6 +518,70 @@ def test_history_is_written_after_each_item_not_at_the_end(tmp_path):
     assert queue.items[ids[1]]["state"] == "PENDING"
 
 
+def test_save_does_not_discard_a_concurrent_write_to_a_different_item(tmp_path):
+    """Two Queue instances over the same file, the shape gui/data.Data
+    hands out a fresh one per call. queue_b flags a second item after
+    queue_a has already loaded; queue_a never sees it in memory, but
+    queue_a._save() (triggered here by cancel()) must not blindly
+    overwrite the file with its own stale items dict and erase it.
+    """
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    queue_a = reclaim.Queue(q_path, h_path, now=NOW)
+    id1 = queue_a.flag("tv", 1, "Show One", 100, make_evidence())
+
+    queue_b = reclaim.Queue(q_path, h_path, now=NOW)
+    id2 = queue_b.flag("tv", 2, "Show Two", 200, make_evidence())
+
+    queue_a.cancel(id1)
+
+    with open(q_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk["items"][id1]["state"] == "CANCELLED"
+    assert id2 in on_disk["items"], (
+        "a concurrent flag from another Queue instance must survive a "
+        "later save from a stale one")
+    assert on_disk["items"][id2]["state"] == "PENDING"
+
+
+def test_a_stale_queue_object_disagrees_with_a_fresh_reread_after_a_cancel(
+        tmp_path):
+    """Models the failure mode in gui/main.py's _build_hold(): NiceGUI
+    hands each open browser tab its own Queue bound at render time.
+    Tab A renders while an item is still on hold; tab B cancels that same
+    item through its own Queue. Tab A's original Queue object, if trusted
+    as-is, still reports PENDING - the exact bug the execute-path fix
+    (re-reading a fresh Queue from disk immediately before calling
+    reclaim.execute()) exists to close. This pins down that a fresh
+    Queue() opened right before execute time does see the cancel, so the
+    fix in gui/main.py's do_execute() has something real to rely on.
+    """
+    q_path = str(tmp_path / "reclaim-queue.json")
+    h_path = str(tmp_path / "reclaim-history.json")
+    flagging_queue = reclaim.Queue(q_path, h_path, now=NOW)
+    item_id = flagging_queue.flag("tv", 1, "A Show", 100, make_evidence())
+    flagging_queue.items[item_id]["flagged_at"] = (
+        NOW - datetime.timedelta(days=30)).timestamp()
+    flagging_queue._save()
+
+    later = NOW + datetime.timedelta(days=1)
+    tab_a_queue = reclaim.Queue(q_path, h_path, now=later)
+    assert tab_a_queue.is_due(item_id, CONFIG["hold_days"]) is True
+
+    tab_b_queue = reclaim.Queue(q_path, h_path, now=later)
+    tab_b_queue.cancel(item_id)
+
+    # Tab A's own in-memory object is now stale and must not be trusted.
+    assert tab_a_queue.items[item_id]["state"] == "PENDING"
+    assert tab_a_queue.is_due(item_id, CONFIG["hold_days"]) is True
+
+    # The fix: re-read a fresh Queue from disk immediately before
+    # executing, rather than trusting the object the tab was built from.
+    fresh_queue = reclaim.Queue(q_path, h_path, now=later)
+    assert fresh_queue.items[item_id]["state"] == "CANCELLED"
+    assert fresh_queue.is_due(item_id, CONFIG["hold_days"]) is False
+
+
 def test_cancel_works_from_both_pending_and_due(tmp_path):
     q_path = str(tmp_path / "reclaim-queue.json")
     h_path = str(tmp_path / "reclaim-history.json")

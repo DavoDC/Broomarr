@@ -76,6 +76,7 @@ class Queue:
         self._now = now
         self.items = {}
         self._next_id = 1
+        self._dirty_ids = set()
         self._load()
 
     def now(self):
@@ -93,8 +94,33 @@ class Queue:
         self._next_id = data.get("next_id", 1)
 
     def _save(self):
+        """Reload-then-merge, not a blind overwrite. NiceGUI hands out a
+        fresh Queue per open browser tab over the same file (see
+        gui/data.Data.queue()), so this instance's in-memory self.items
+        can already be stale by the time it saves. Re-reading the file
+        immediately before writing and merging only the items THIS
+        instance itself changed - tracked in self._dirty_ids by flag(),
+        cancel(), return_to_pending() and mark_removed() - means a
+        concurrent writer's change to a different item is never silently
+        discarded. next_id only ever grows, so two instances flagging
+        around the same time still land on distinct ids.
+        """
+        on_disk_items, on_disk_next_id = {}, 1
+        if os.path.exists(self.path):
+            with open(self.path, encoding="utf-8") as fh:
+                on_disk = json.load(fh)
+            on_disk_items = on_disk.get("items", {})
+            on_disk_next_id = on_disk.get("next_id", 1)
+
+        merged_items = dict(on_disk_items)
+        for item_id in self._dirty_ids:
+            merged_items[item_id] = self.items[item_id]
+        merged_next_id = max(self._next_id, on_disk_next_id)
+
         _atomic_write_json(self.path,
-                           {"items": self.items, "next_id": self._next_id})
+                           {"items": merged_items, "next_id": merged_next_id})
+        self.items = merged_items
+        self._next_id = merged_next_id
 
     def flag(self, kind, service_id, title, size_bytes, evidence):
         """Add one item to the queue as PENDING. Writes no request to any
@@ -112,6 +138,7 @@ class Queue:
             "state": "PENDING",
             "reason": None,
         }
+        self._dirty_ids.add(item_id)
         self._save()
         return item_id
 
@@ -132,6 +159,7 @@ class Queue:
         Always one click, never a confirmation.
         """
         self.items[item_id]["state"] = "CANCELLED"
+        self._dirty_ids.add(item_id)
         self._save()
 
     def return_to_pending(self, item_id, reason):
@@ -142,6 +170,7 @@ class Queue:
         record["state"] = "PENDING"
         record["reason"] = reason
         record["flagged_at"] = self.now().timestamp()
+        self._dirty_ids.add(item_id)
         self._save()
 
     def mark_removed(self, item_id):
@@ -152,6 +181,7 @@ class Queue:
         record = self.items[item_id]
         record["state"] = "REMOVED"
         record["removed_at"] = self.now().timestamp()
+        self._dirty_ids.add(item_id)
         self._save()
         history = []
         if os.path.exists(self.history_path):
