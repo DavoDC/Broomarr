@@ -166,6 +166,17 @@ def _build_review_table(container, kind, safe_items, blocked_items,
         def render_rows():
             show_all_state[0] = show_all.value
             rows_container.clear()
+            # Re-read the queue fresh so a flag from this tab (or another
+            # tab, or the CLI) already on the books shows up immediately -
+            # otherwise "Flag for removal" stays clickable after a
+            # successful flag and a second click would just be silently
+            # deduped by Queue.flag() with no visible feedback.
+            queue = STORE.queue()
+            flagged_ids = {
+                record["service_id"]
+                for record in queue.items.values()
+                if record["state"] == "PENDING" and record["kind"] == kind
+            }
             with rows_container:
                 items = safe_items + (blocked_items if show_all.value else [])
                 if not items:
@@ -189,9 +200,14 @@ def _build_review_table(container, kind, safe_items, blocked_items,
                                 for reason in item["reasons"]:
                                     ui.label("- %s" % reason)
                         if item["safe"]:
-                            ui.button(
-                                "Flag for removal",
-                                on_click=lambda _, i=item: on_flag(kind, i))
+                            if item["id"] in flagged_ids:
+                                ui.button("Already flagged").props(
+                                    "disable")
+                            else:
+                                ui.button(
+                                    "Flag for removal",
+                                    on_click=lambda _, i=item: on_flag(
+                                        kind, i))
 
         show_all.on_value_change(lambda _: render_rows())
         render_rows()

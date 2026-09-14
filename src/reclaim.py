@@ -125,7 +125,22 @@ class Queue:
     def flag(self, kind, service_id, title, size_bytes, evidence):
         """Add one item to the queue as PENDING. Writes no request to any
         service - flagging is purely local state. Returns the new item id.
+
+        Deduped against an existing PENDING record for the same (kind,
+        service_id): a second flag click on the same title before a
+        re-render lands must not create a second queue entry pointing at
+        the same Sonarr/Radarr id - both would eventually come due, both
+        would pass re-verification, and the second one's pre-delete
+        re-read would hit the "no longer found" path once the first
+        delete already happened. Once that record is no longer PENDING
+        (cancelled or removed), the same id is flaggable again.
         """
+        for existing_id, record in self.items.items():
+            if (record["state"] == "PENDING"
+                    and record["kind"] == kind
+                    and record["service_id"] == service_id):
+                return existing_id
+
         item_id = str(self._next_id)
         self._next_id += 1
         self.items[item_id] = {

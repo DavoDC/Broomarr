@@ -163,6 +163,37 @@ def test_flagging_writes_no_request(tmp_path):
     assert queue.items  # something was actually recorded locally
 
 
+def test_flag_dedupes_an_existing_pending_item_for_the_same_service_id(
+        tmp_path):
+    """Clicking "Flag for removal" twice on the same title (before a
+    re-render lands) must not create two queue entries pointing at one
+    Sonarr/Radarr id - both would eventually come due, both would pass
+    re-verification, and the second one's pre-delete re-read would hit
+    the "no longer found" 404 path once the first delete already
+    happened. The dedupe belongs in Queue.flag() itself, not the GUI, so
+    the invariant holds regardless of what calls it.
+    """
+    queue = make_queue(tmp_path, NOW)
+    first_id = queue.flag("tv", 1, "A Show", 1000, make_evidence())
+    second_id = queue.flag("tv", 1, "A Show", 2000, make_evidence())
+    assert second_id == first_id
+    assert len(queue.items) == 1
+
+
+def test_flag_allows_a_fresh_item_once_the_old_one_is_no_longer_pending(
+        tmp_path):
+    """Dedupe only applies to an existing PENDING record for the same
+    (kind, service_id) - once that one is cancelled or removed, the same
+    id is flaggable again.
+    """
+    queue = make_queue(tmp_path, NOW)
+    first_id = queue.flag("tv", 1, "A Show", 1000, make_evidence())
+    queue.cancel(first_id)
+    second_id = queue.flag("tv", 1, "A Show", 1000, make_evidence())
+    assert second_id != first_id
+    assert len(queue.items) == 2
+
+
 def test_item_inside_hold_cannot_be_executed(tmp_path):
     lib, movie_lib = make_libs(NOW)
     queue = make_queue(tmp_path, NOW)
