@@ -2,6 +2,85 @@
 
 ---
 
+## 2026-09-14 - Closing the pre-ship audit's HIGH and MEDIUM findings
+
+The architecture and UI review recorded under "Audit findings" in
+`docs/IDEAS.md` turned up two HIGH and several MEDIUM findings against the
+combined build pass. The two HIGH findings and four of the MEDIUM findings
+are fixed; the remaining MEDIUM and LOW findings (watcher-mismatch warning
+coverage, blocking GUI actions, GUI visual polish, the destructive-confirm
+affordances, and the README dependency claim) are left in `docs/IDEAS.md`.
+
+**`reclaim._fetch_single()` swallowed a "record is gone" 404 into an
+uncaught `OSError` instead of returning `None`.** Both `SERVICE_ERRORS`
+wrapping in `lib.sonarr()`/`movie_lib.radarr()` discarded the underlying
+HTTP status, so a series or movie deleted out from under a run raised
+rather than resolving cleanly. That broke the canary re-verification path
+in `execute()` on every successful run: the delete really happened, but the
+raise happened before `queue.mark_removed()` ever ran, so the queue kept
+recording it as `PENDING` and the History tab stayed empty after a genuine
+removal. `_fetch_single()` now builds its URL and calls `client.fetch()`
+directly, catching `HTTPError` itself: a 404 returns `None` as documented,
+any other service failure raises `ReclaimError` (visible to the GUI, unlike
+a bare `OSError`).
+
+**Two `Queue` instances - one per open browser tab - could clobber each
+other's state.** `Queue._save()` rewrote the whole on-disk document from
+memory with no reload, and NiceGUI hands out a fresh `Queue` per connected
+tab over the same file. A stale tab's Cancel or flag could silently
+overwrite a concurrent change from another tab, including a tab executing
+an item another tab had already cancelled. `_save()` now reloads the
+on-disk document and merges in only the items this instance itself
+dirtied, tracked via a `_dirty_ids` set; `gui/main.py`'s `do_execute()` now
+re-reads a fresh queue immediately before executing and filters to items
+still `PENDING` and due.
+
+**Nothing cross-checked identity before deleting, only the service id.** A
+reused Sonarr/Radarr id (a database restore, a remove-and-re-add) could
+carry a week-old flag to a different show or movie under a name a human
+never confirmed. A new `_identity_mismatch()` check compares `tvdb_id` (TV)
+or `(title, year)` (movies) between the evidence captured at flag time and
+the live record, in both the bulk re-verify pass (interlock 3) and the
+per-item pre-delete re-read (interlock 6); a mismatch aborts the whole run
+with a `ReclaimError` rather than being folded into the ordinary
+return-to-PENDING path.
+
+**Duplicate flagging had no safe outcome.** `Queue.flag()` now dedupes
+against an existing `PENDING` record for the same `(kind, service_id)`,
+returning the existing item's id rather than creating a second one; once
+that record is cancelled or removed, the same id is flaggable again. The
+GUI's review table re-reads the queue on every render and shows a disabled
+"Already flagged" button instead of a clickable one for anything already
+`PENDING`.
+
+**The stdlib-boundary test could not fail on this repo's Python.**
+`test_broomarr_and_reclaim_import_with_nicegui_blocked` built its
+meta-path finder on the deprecated, and as of Python 3.12 no-longer-
+consulted, `find_module()` hook, which silently never fires - confirmed
+directly, since the old-style finder let `import nicegui` through with no
+error at all. The finder now defines `find_spec()`, and a new self-check
+test proves the block is real by attempting `import nicegui` (installed in
+the dev environment) through the same finder and requiring it to fail.
+
+**`movie_facts()`/`MovieFacts` were dead code**, tested but never called;
+`MovieLibrary.verdict()` read `hasFile`/`status` straight off whatever
+movie dict the caller passed in, which could be a stale in-memory copy.
+`verdict()` now looks the movie up by id through `movie_facts()`, which
+gained a `status` field so `verdict()` keeps its status-specific messages;
+a missing id is now its own explicit "unknown blocks" reason.
+
+**`src/` still told the user Broomarr never deletes anything**, in the
+module docstring, `USAGE`, `scan()`, `movie_scan()` and
+`dry_run_report.render()` - missed by the CLAUDE.md/README/DevContext
+rewrite earlier the same day, since that pass did not touch `src/`. Each
+now states the narrow claim precisely (this scan, this report, does not
+delete anything by itself) and points at the GUI's Hold Queue as where a
+confirmed removal actually happens.
+
+`python -m pytest tests -q`: 85 passed.
+
+---
+
 ## 2026-09-14 - The GUI, and telling the safety story straight
 
 Fourth and fifth steps of the build brief in `docs/design/build-brief.md`,
