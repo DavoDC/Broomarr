@@ -183,9 +183,11 @@ def render(lib, safe_items, blocked_items, total_series, candidate_count):
                  % datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     lines.append("watcher=%r  quiet_days=%d" % (lib.watcher, lib.quiet_days))
     lines.append("")
-    lines.append("Broomarr never deletes anything. Everything below is a "
-                 "proposal for you to review; nothing has been changed on "
-                 "disk or in Sonarr. Delete through Sonarr by hand.")
+    lines.append("This report never deletes anything. Everything below is "
+                 "a proposal for you to review; nothing has been changed "
+                 "on disk or in Sonarr. Delete through Sonarr by hand, or "
+                 "flag a candidate in the GUI's Hold Queue to remove it "
+                 "after a confirmed hold.")
     lines.append("")
     lines.append("%d series in Sonarr, %d passed the cheap prefilter and "
                  "were examined in full, %d safe, %d blocked."
@@ -215,7 +217,8 @@ def render(lib, safe_items, blocked_items, total_series, candidate_count):
             lines.append(_render_blocked(item))
 
     lines.append("")
-    lines.append("Delete through Sonarr by hand. Broomarr never deletes anything.")
+    lines.append("Delete through Sonarr by hand. This report never deletes "
+                 "anything.")
     return "\n".join(lines) + "\n"
 
 

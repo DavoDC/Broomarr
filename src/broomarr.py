@@ -20,9 +20,12 @@ does not apply. Radarr is optional - config.json without radarr_url/
 radarr_api_key simply skips the movie side; --movies and the movie half of
 --all otherwise use the same MovieLibrary.verdict() joining on (title, year).
 
-Read-only by design, permanently. This must never grow a --delete flag - an
-unrun script deletes nothing, which is the entire reason it is safe to rely
-on. Deletion stays a deliberate manual action in Sonarr or Radarr.
+Read-only by design, permanently. This module must never grow a --delete
+flag, a write call to any API, or filesystem access. Deletion lives in
+src/reclaim.py and nowhere else, reached only through the GUI's Hold Queue
+after a candidate has been flagged, held, re-verified against live data and
+confirmed a second time - never from this scan. Nothing here ever imports
+reclaim.
 """
 
 import collections
@@ -637,7 +640,9 @@ def scan(lib):
             print("  %s" % series["title"])
             for reason in reasons:
                 print("      - %s" % reason)
-    print("\nDelete through Sonarr by hand. Broomarr never deletes anything.")
+    print("\nThis scan does not delete anything. Delete through Sonarr by "
+         "hand, or flag a candidate in the GUI's Hold Queue "
+         "(python -m gui.main) to remove it after a confirmed hold.")
 
 
 def movie_scan(lib):
@@ -683,7 +688,9 @@ def movie_scan(lib):
             print("  %s" % movie["title"])
             for reason in reasons:
                 print("      - %s" % reason)
-    print("\nDelete through Radarr by hand. Broomarr never deletes anything.")
+    print("\nThis scan does not delete anything. Delete through Radarr by "
+         "hand, or flag a candidate in the GUI's Hold Queue "
+         "(python -m gui.main) to remove it after a confirmed hold.")
 
 
 def check(lib, movie_lib=None):
@@ -750,8 +757,11 @@ Broomarr - which TV shows and movies are actually safe to delete?
   python src/broomarr.py --check            check config.json against every configured service
   python src/broomarr.py --help             show this message
 
-Broomarr never deletes anything. It only ever prints a list; you delete
-through Sonarr or Radarr yourself.
+This command-line scan never deletes anything - it only ever prints a list;
+you delete through Sonarr or Radarr yourself. Removing something for real
+happens through the GUI (python -m gui.main), which holds a flagged
+candidate and asks you to confirm twice, days apart, before anything is
+deleted.
 """
 
 
